@@ -1,0 +1,11 @@
+# Talk to Data Service - Dependencies
+
+# Web framework
+flask>=2.0.0
+
+# LLM Providers
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Environment variable management
+python-dotenv>=1.0.0
