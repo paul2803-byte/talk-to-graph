@@ -22,8 +22,8 @@ class QueryGenerator:
     
     The generator uses environment variables for configuration:
     - LLM_API_KEY: API key for the LLM provider
-    - LLM_PROVIDER: Provider name (openai, anthropic, azure, etc.)
-    - LLM_MODEL: Model to use (e.g., gpt-4o, claude-3-opus)
+    - LLM_PROVIDER: Provider name (openai, anthropic, azure, google)
+    - LLM_MODEL: Model to use (e.g., gpt-4o, claude-3-opus, gemini-1.5-flash)
     """
     
     def __init__(
@@ -76,6 +76,10 @@ class QueryGenerator:
                 azure_endpoint=azure_endpoint,
                 api_version=api_version
             )
+        elif self.provider == "google":
+            import google.generativeai as genai
+            genai.configure(api_key=self.api_key)
+            self._client = genai
         else:
             raise QueryGeneratorError(f"Unsupported provider: {self.provider}")
         
@@ -110,6 +114,16 @@ class QueryGenerator:
                     ]
                 )
                 return response.content[0].text
+            elif self.provider == "google":
+                model = client.GenerativeModel(
+                    model_name=self.model,
+                    system_instruction=system_prompt
+                )
+                response = model.generate_content(
+                    user_message,
+                    generation_config={"temperature": 0.1}
+                )
+                return response.text
             else:
                 # OpenAI and Azure OpenAI use the same API
                 response = client.chat.completions.create(
