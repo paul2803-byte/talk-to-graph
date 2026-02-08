@@ -4,62 +4,48 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from query_generation import generate_sparql_query
-from query_generation.generator import QueryGeneratorError
+from orchestrator import OrchestratorService
 
 app = Flask(__name__)
+orchestrator_service = OrchestratorService()
 
-@app.route('/')
+@app.route('/api/ping')
 def home():
-    return "Hello, World!"
+    print('Server pinged')
+    return "Server running"
+    
 
-@app.route('/api/data', methods=['GET'])
-def get_data():
-    return jsonify({"message": "This is JSON data", "status": "success"})
-
-@app.route('/api/data', methods=['POST'])
-def post_data():
-    data = request.get_json()
-    return jsonify({"received": data, "status": "success"})
-
-@app.route('/api/generate-sparql', methods=['POST'])
-def generate_sparql():
+@app.route('/api/talk-to-data', methods=['POST'])
+def talk_to_data():
     """
-    Generate a SPARQL query from a natural language question.
+    Endpoint for talking to data. Calls the orchestration service.
     
     Request body:
     {
-        "ontology": "<ontology in JSON-LD or other graph format>",
-        "question": "<natural language question>"
-    }
-    
-    Response:
-    {
-        "query": "<generated SPARQL query>",
-        "status": "success"
+        "question": "string",
+        "data": {},
+        "ontology_url": "url"
     }
     """
-    data = request.get_json()
+    request_data = request.get_json()
     
-    if not data:
+    if not request_data:
         return jsonify({"error": "Request body is required", "status": "error"}), 400
     
-    ontology = data.get("ontology")
-    question = data.get("question")
-    
-    if not ontology:
-        return jsonify({"error": "Ontology is required", "status": "error"}), 400
+    question = request_data.get("question")
+    data_payload = request_data.get("data", {})
+    ontology_url = request_data.get("ontology_url")
     
     if not question:
         return jsonify({"error": "Question is required", "status": "error"}), 400
-    
+    if ontology_url is None:
+        return jsonify({"error": "Ontology URL is required", "status": "error"}), 400
+        
     try:
-        query = generate_sparql_query(ontology, question)
-        return jsonify({"query": query, "status": "success"})
-    except QueryGeneratorError as e:
-        return jsonify({"error": str(e), "status": "error"}), 500
+        result = orchestrator_service.talk_to_data(question, data_payload, ontology_url)
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"error": f"Unexpected error: {str(e)}", "status": "error"}), 500
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=True)
