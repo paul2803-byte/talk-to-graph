@@ -23,9 +23,7 @@ class OrchestratorService:
         """
         # fetch ontology from ontology_url
         try:
-            ontology_data = self.fetch_service.fetch_ontology(ontology_url)
-            # Convert dict to string for the generator
-            ontology_str = json.dumps(ontology_data)
+            ontology_obj = self.fetch_service.fetch_ontology(ontology_url)
         except Exception as e:
             return {
                 "status": "error",
@@ -34,17 +32,7 @@ class OrchestratorService:
 
         # generate sparql query from question and ontology
         try:
-            # sparql_query = generate_sparql_query(ontology_str, question)
-            sparql_query = """
-                PREFIX demo: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
-                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-                SELECT (AVG(?gehalt) AS ?avgGehalt)
-                WHERE {
-                ?person a demo:AnonymisationDemo ;
-                        demo:gehalt ?gehalt .
-                }
-            """
+            sparql_query = generate_sparql_query(ontology_obj, question)
             print(f"Generated SPARQL Query:\n{sparql_query}")
         except Exception as e:
             return {
@@ -57,7 +45,6 @@ class OrchestratorService:
         # execute sparql query on data
         try:
             query_results = self.execution_service.execute_sparql_query(sparql_query, data)
-            print(f"Query Results: {query_results}")
         except Exception as e:
             return {
                 "status": "error",

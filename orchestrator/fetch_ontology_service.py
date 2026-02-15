@@ -1,44 +1,72 @@
 import requests
-import json
+import yaml
 from typing import Any, Dict
+from models.ontology import Ontology, OntologyObject, Attribute
 
 class FetchOntologyService:
     """
-    Service to fetch ontology content from a URL and validate it as JSON.
+    Service to fetch ontology content from a URL in YAML format and return an Ontology object.
     """
 
-    def fetch_ontology(self, url: str) -> Dict[str, Any]:
+    def fetch_ontology(self, url: str) -> Ontology:
         """
-        Calls the provided URL, fetches the content, validates it is valid JSON, and returns it.
+        Calls the provided URL (appending /yaml), fetches the content, 
+        validates it is valid YAML, and returns an Ontology structure.
 
         Args:
             url (str): The URL to fetch the ontology from.
 
         Returns:
-            Dict[str, Any]: The parsed JSON content.
+            Ontology: The structured ontology object.
 
         Raises:
-            ValueError: If the content is not valid JSON.
+            ValueError: If the content is not valid YAML or missing required keys.
             requests.exceptions.RequestException: If the URL call fails.
         """
+        # Append /yaml to the URL as requested
+        yaml_url = url.rstrip('/') + '/yaml'
+        
         try:
-            response = requests.get(url, timeout=30)
-            # Raise an exception for bad status codes (4xx or 5xx)
+            response = requests.get(yaml_url, timeout=30)
             response.raise_for_status()
             
-            # Try to parse the content as JSON
             try:
-                ontology_data = response.json()
-                return ontology_data
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Content from URL is not valid JSON: {str(e)}")
+                # Use safe_load for security
+                data = yaml.safe_load(response.text)
+                
+                if not data or 'content' not in data or 'meta' not in data:
+                    raise ValueError("Content or meta section missing in ontology YAML")
+
+                meta_name = data.get('meta', {}).get('name', 'Anonymisation')
+                base_uri = f"https://soya.ownyourdata.eu/{meta_name}/"
+                
+                ontology = Ontology(
+                    prefix="oyd",
+                    base_uri=base_uri,
+                    objects=[]
+                )
+
+                for base in data.get('content', {}).get('bases', []):
+                    name = base.get('name')
+                    if not name:
+                        continue
+                        
+                    obj = OntologyObject(name=name, attributes=[])
+                    
+                    attributes = base.get('attributes', {})
+                    for attr_name, attr_type in attributes.items():
+                        obj.attributes.append(Attribute(name=attr_name, type=attr_type))
+                    
+                    ontology.objects.append(obj)
+                
+                return ontology
+                
+            except yaml.YAMLError as e:
+                raise ValueError(f"Content from URL is not valid YAML: {str(e)}")
                 
         except requests.exceptions.RequestException as e:
-            # Re-raise with a bit more context if needed, or just let it bubble up
-            raise Exception(f"Failed to fetch ontology from {url}: {str(e)}")
+            raise Exception(f"Failed to fetch ontology from {yaml_url}: {str(e)}")
 
 if __name__ == "__main__":
     # Quick manual test block
     service = FetchOntologyService()
-    # Example URL (placeholder)
-    # print(service.fetch_ontology("https://api.github.com"))

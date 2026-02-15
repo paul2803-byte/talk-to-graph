@@ -9,6 +9,7 @@ import os
 from typing import Optional
 
 from .sparql_agent import get_sparql_agent_prompt, format_user_message
+from models.ontology import Ontology
 
 
 class QueryGeneratorError(Exception):
@@ -85,12 +86,12 @@ class QueryGenerator:
         
         return self._client
     
-    def generate(self, ontology: str, question: str) -> str:
+    def generate(self, ontology: Ontology, question: str) -> str:
         """
         Generate a SPARQL query from a natural language question.
         
         Args:
-            ontology: The ontology in JSON-LD or other graph format.
+            ontology: The structured Ontology object.
             question: The user's natural language question.
         
         Returns:
@@ -113,7 +114,7 @@ class QueryGenerator:
                         {"role": "user", "content": user_message}
                     ]
                 )
-                return response.content[0].text
+                result = response.content[0].text
             elif self.provider == "google":
                 model = client.GenerativeModel(
                     model_name=self.model,
@@ -123,7 +124,7 @@ class QueryGenerator:
                     user_message,
                     generation_config={"temperature": 0.1}
                 )
-                return response.text
+                result = response.text
             else:
                 # OpenAI and Azure OpenAI use the same API
                 response = client.chat.completions.create(
@@ -134,7 +135,21 @@ class QueryGenerator:
                     ],
                     temperature=0.1  # Low temperature for more deterministic output
                 )
-                return response.choices[0].message.content
+                result = response.choices[0].message.content
+            
+            # Post-processing to remove markdown code blocks and extra whitespace
+            if result:
+                result = result.strip()
+                # Remove ```sparql or ``` tags
+                if result.startswith("```"):
+                    lines = result.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    result = "\n".join(lines).strip()
+            
+            return result
         except Exception as e:
             raise QueryGeneratorError(f"Failed to generate query: {str(e)}") from e
 
@@ -143,38 +158,16 @@ class QueryGenerator:
 _default_generator: Optional[QueryGenerator] = None
 
 
-def generate_sparql_query(ontology: str, question: str) -> str:
+def generate_sparql_query(ontology: Ontology, question: str) -> str:
     """
     Generate a SPARQL query from a natural language question.
     
-    This is the main entry point for the query generation service.
-    Uses environment variables for LLM configuration:
-    - LLM_API_KEY: API key for the LLM provider
-    - LLM_PROVIDER: Provider name (openai, anthropic, azure)
-    - LLM_MODEL: Model to use
-    
     Args:
-        ontology: The ontology in JSON-LD or other graph format (as string).
+        ontology: The structured Ontology object.
         question: The user's natural language question.
     
     Returns:
         str: The generated SPARQL query.
-    
-    Raises:
-        QueryGeneratorError: If query generation fails.
-    
-    Example:
-        >>> ontology = '''
-        ... {
-        ...   "@context": {"@vocab": "http://example.org/"},
-        ...   "@graph": [
-        ...     {"@id": "Person", "@type": "rdfs:Class"},
-        ...     {"@id": "name", "@type": "rdf:Property"}
-        ...   ]
-        ... }
-        ... '''
-        >>> question = "Find all persons with name John"
-        >>> query = generate_sparql_query(ontology, question)
     """
     global _default_generator
     
