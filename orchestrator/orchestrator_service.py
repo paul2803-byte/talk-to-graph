@@ -34,17 +34,7 @@ class OrchestratorService:
 
         # generate sparql query from question and ontology
         try:
-            # sparql_query = generate_sparql_query(ontology_str, question)
-            sparql_query = """
-                PREFIX demo: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
-                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-                SELECT (AVG(?gehalt) AS ?avgGehalt)
-                WHERE {
-                ?person a demo:AnonymisationDemo ;
-                        demo:gehalt ?gehalt .
-                }
-            """
+            sparql_query = generate_sparql_query(ontology_str, question)
             print(f"Generated SPARQL Query:\n{sparql_query}")
         except Exception as e:
             return {

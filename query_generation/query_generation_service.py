@@ -134,7 +134,21 @@ class QueryGenerator:
                     ],
                     temperature=0.1  # Low temperature for more deterministic output
                 )
-                return response.choices[0].message.content
+                result = response.choices[0].message.content
+            
+            # Post-processing to remove markdown code blocks and extra whitespace
+            if result:
+                result = result.strip()
+                # Remove ```sparql or ``` tags
+                if result.startswith("```"):
+                    lines = result.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    result = "\n".join(lines).strip()
+            
+            return result
         except Exception as e:
             raise QueryGeneratorError(f"Failed to generate query: {str(e)}") from e
 
