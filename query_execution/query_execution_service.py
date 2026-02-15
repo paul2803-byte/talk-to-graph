@@ -49,8 +49,6 @@ class QueryExecutionService:
                 result_item = {}
                 # row is a result binding, iterate through variable names
                 for var in query_results.vars:
-                    print('query result')
-                    print(var)
                     val = row[var]
                     # Convert rdflib types to simple Python types for output
                     if val is not None:
