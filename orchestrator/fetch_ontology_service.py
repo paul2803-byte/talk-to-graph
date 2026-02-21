@@ -1,6 +1,5 @@
 import requests
 import yaml
-from typing import Any, Dict
 from models.ontology import Ontology, OntologyObject, Attribute
 
 class FetchOntologyService:
@@ -54,8 +53,18 @@ class FetchOntologyService:
                     obj = OntologyObject(name=name, attributes=[])
                     
                     attributes = base.get('attributes', {})
-                    for attr_name, attr_type in attributes.items():
-                        obj.attributes.append(Attribute(name=attr_name, type=attr_type))
+                    for attr_name, attr_values in attributes.items():
+                        if isinstance(attr_values, list) and len(attr_values) >= 2:
+                            anonymization_type = attr_values[0]
+                            sensitivity_level = attr_values[1]
+                        else:
+                            anonymization_type = str(attr_values) if attr_values else ''
+                            sensitivity_level = 'not-sensitive'
+                        obj.attributes.append(Attribute(
+                            name=attr_name,
+                            anonymization_type=anonymization_type,
+                            sensitivity_level=sensitivity_level
+                        ))
                     
                     ontology.objects.append(obj)
                 

@@ -1,13 +1,13 @@
-import json
 from typing import Any
 from orchestrator.fetch_ontology_service import FetchOntologyService
-from query_generation import generate_sparql_query
 from query_execution import QueryExecutionService
+from query_evaluation import QueryEvaluationService
 
 class OrchestratorService:
     def __init__(self):
         self.fetch_service = FetchOntologyService()
         self.execution_service = QueryExecutionService()
+        self.evaluation_service = QueryEvaluationService()
 
     def talk_to_data(self, question: str, data: Any, ontology_url: str) -> dict:
         """
@@ -32,7 +32,15 @@ class OrchestratorService:
 
         # generate sparql query from question and ontology
         try:
-            sparql_query = generate_sparql_query(ontology_obj, question)
+            # sparql_query = generate_sparql_query(ontology_obj, question)
+            sparql_query = """
+                PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
+                SELECT (AVG(?gehalt) AS ?averageSalary)
+                WHERE {
+                    ?s a oyd:Object1 ;
+                    oyd:gehalt ?gehalt .
+                }
+            """
             print(f"Generated SPARQL Query:\n{sparql_query}")
         except Exception as e:
             return {
@@ -40,7 +48,20 @@ class OrchestratorService:
                 "message": f"Failed to generate SPARQL query: {str(e)}"
             }
 
-        # TODO #3 validate generalization on sensitve attributes
+        # Build sensitivity config from ontology and evaluate query
+        sensitivity_config = {}
+        for obj in ontology_obj.objects:
+            for attr in obj.attributes:
+                sensitivity_config[attr.name] = attr.sensitivity_level
+
+        is_valid, eval_message = self.evaluation_service.evaluate_query(
+            sparql_query, sensitivity_config
+        )
+        if not is_valid:
+            return {
+                "status": "error",
+                "message": f"Query rejected by k-anonymity evaluation: {eval_message}"
+            }
         
         # execute sparql query on data
         try:
