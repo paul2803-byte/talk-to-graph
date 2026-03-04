@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 class Attribute:
     """Represents an attribute/property of an ontology object."""
     name: str
-    type: str
+    anonymization_type: str
+    sensitivity_level: str
 
 @dataclass
 class OntologyObject:

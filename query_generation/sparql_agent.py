@@ -68,21 +68,16 @@ def format_user_message(ontology: Ontology, question: str) -> str:
         ontology_md += f"#### Class: {ontology.prefix}:{obj.name}\n"
         
         datatybe_attrs = []
-        object_attrs = []
         
         for attr in obj.attributes:
-            # Simple heuristic for type mapping
-            if attr.type.lower() in ['string', 'integer', 'date', 'number', 'boolean']:
-                xsd_type = f"xsd:{attr.type.lower()}"
-                if attr.type.lower() == 'number': xsd_type = "xsd:decimal"
-                datatybe_attrs.append(f"  - {ontology.prefix}:{attr.name} (Type: {xsd_type})")
-            else:
-                object_attrs.append(f"  - {ontology.prefix}:{attr.name} (Target: {ontology.prefix}:{attr.type})")
+            datatybe_attrs.append(
+                f"  - {ontology.prefix}:{attr.name} "
+                f"(Anonymization: {attr.anonymization_type}, "
+                f"Sensitivity: {attr.sensitivity_level})"
+            )
         
         if datatybe_attrs:
             ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatybe_attrs) + "\n"
-        if object_attrs:
-            ontology_md += "- **Relationships (Object Properties)**:\n" + "\n".join(object_attrs) + "\n"
         
         ontology_md += "\n"
 
