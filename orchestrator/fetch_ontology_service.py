@@ -51,15 +51,24 @@ class FetchOntologyService:
                         continue
                         
                     obj = OntologyObject(name=name, attributes=[])
+
+                    # Find matching OverlayClassification overlay for this base
+                    overlay_attrs = {}
+                    for overlay in data.get('content', {}).get('overlays', []):
+                        if overlay.get('base') == name and overlay.get('type') == 'OverlayClassification':
+                            overlay_attrs = overlay.get('attributes', {})
+                            break
                     
                     attributes = base.get('attributes', {})
+
                     for attr_name, attr_values in attributes.items():
-                        if isinstance(attr_values, list) and len(attr_values) >= 2:
-                            anonymization_type = attr_values[0]
-                            sensitivity_level = attr_values[1]
+                        overlay_values = overlay_attrs.get(attr_name, [])
+                        if isinstance(overlay_values, list) and len(overlay_values) >= 2:
+                            anonymization_type = overlay_values[0]
+                            sensitivity_level = overlay_values[1]
                         else:
-                            anonymization_type = str(attr_values) if attr_values else ''
-                            sensitivity_level = 'not-sensitive'
+                            anonymization_type = ''
+                            sensitivity_level = 'sensitive'
                         obj.attributes.append(Attribute(
                             name=attr_name,
                             anonymization_type=anonymization_type,
