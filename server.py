@@ -25,7 +25,8 @@ def talk_to_data():
     {
         "question": "string",
         "data": {},
-        "ontology_url": "url"
+        "ontology_url": "url",
+        "sessionId": "optional string"
     }
     """
     request_data = request.get_json()
@@ -36,6 +37,7 @@ def talk_to_data():
     question = request_data.get("question")
     data_payload = request_data.get("data", {})
     ontology_url = request_data.get("ontology_url")
+    session_id = request_data.get("sessionId")
 
     if not question:
         return jsonify({"error": "Question is required", "status": "error"}), 400
@@ -43,17 +45,22 @@ def talk_to_data():
         return jsonify({"error": "Ontology URL is required", "status": "error"}), 400
 
     try:
-        result = orchestrator_service.talk_to_data(question, data_payload, ontology_url)
+        result = orchestrator_service.talk_to_data(
+            question, data_payload, ontology_url, session_id=session_id
+        )
         return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e), "status": "error"}), 500
+        return jsonify({"error": "An internal error occurred.", "status": "error"}), 500
 
 
 # ── Privacy budget endpoints ───────────────────────────────────────────
 
 @app.route('/api/privacy-budget', methods=['GET'])
 def get_privacy_budget():
-    """Return the current privacy budget status."""
+    """Return the current privacy budget status.
+
+    The budget is global (shared across all sessions).
+    """
     return jsonify({
         "remaining_budget": orchestrator_service.budget_service.get_remaining(),
         "epsilon_total": orchestrator_service._config.epsilon_total,
