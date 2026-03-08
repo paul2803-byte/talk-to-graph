@@ -69,10 +69,24 @@ class FetchOntologyService:
                         else:
                             anonymization_type = ''
                             sensitivity_level = 'sensitive'
+
+                        # Read optional min/max bounds (indices 2 and 3 in the overlay list)
+                        min_value = None
+                        max_value = None
+                        if isinstance(overlay_values, list) and len(overlay_values) >= 4:
+                            try:
+                                min_value = float(overlay_values[2])
+                                max_value = float(overlay_values[3])
+                            except (ValueError, TypeError):
+                                min_value = None
+                                max_value = None
+
                         obj.attributes.append(Attribute(
                             name=attr_name,
                             anonymization_type=anonymization_type,
-                            sensitivity_level=sensitivity_level
+                            sensitivity_level=sensitivity_level,
+                            min_value=min_value,
+                            max_value=max_value,
                         ))
                     
                     ontology.objects.append(obj)

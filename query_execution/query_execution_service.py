@@ -50,9 +50,14 @@ class QueryExecutionService:
                 # row is a result binding, iterate through variable names
                 for var in query_results.vars:
                     val = row[var]
-                    # Convert rdflib types to simple Python types for output
+                    # Preserve native Python types (int, float, datetime, etc.)
+                    # so that downstream services like NoiseService can work
+                    # with numeric values directly.
                     if val is not None:
-                        result_item[str(var)] = str(val)
+                        try:
+                            result_item[str(var)] = val.toPython()
+                        except AttributeError:
+                            result_item[str(var)] = str(val)
                     else:
                         result_item[str(var)] = None
                 results.append(result_item)

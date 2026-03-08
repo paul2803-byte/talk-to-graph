@@ -17,3 +17,9 @@ requests>=2.25.0
 # Linked Data processing
 rdflib>=7.0.0
 rdflib-jsonld>=0.6.0
+
+# Differential Privacy
+numpy>=1.24.0
+
+# Testing
+pytest>=7.0.0
