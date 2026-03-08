@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.algebra import translateQuery
@@ -25,23 +25,48 @@ class QueryEvaluationService:
                            "Aggregate_Min", "Aggregate_Max", "Aggregate_Sample",
                            "Aggregate_GroupConcat"}
 
-    def evaluate_query(self, query: str, sensitivity_config: Dict[str, str]) -> Tuple[bool, str]:
+    # Aggregates that are blocked unconditionally on semi-sensitive attributes
+    _BLOCKED_AGGREGATES = {"Aggregate_Min", "Aggregate_Max", "Aggregate_Sample", "Aggregate_GroupConcat"}
+
+    # Aggregates that require ontology bounds (SUM, AVG) — COUNT is exempt
+    _BOUNDS_REQUIRED_AGGREGATES = {"Aggregate_Sum", "Aggregate_Avg"}
+
+    # Mapping from algebra names to the short names used in aggregate_info
+    _AGG_SHORT_NAMES = {
+        "Aggregate_Count": "count",
+        "Aggregate_Sum": "sum",
+        "Aggregate_Avg": "avg",
+    }
+
+    def evaluate_query(
+        self,
+        query: str,
+        sensitivity_config: Dict[str, str],
+        sensitivity_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
+        max_semi_sensitive_group_by: int = 1,
+    ) -> Tuple[bool, str, List[Dict[str, Any]]]:
         """
-        Evaluates a SPARQL query and returns whether it is valid along with a result message.
+        Evaluates a SPARQL query and returns whether it is valid along with
+        a result message and aggregate metadata.
 
         Args:
-            query (str): The SPARQL query string to evaluate.
-            sensitivity_config (Dict[str, str]): A dictionary mapping attribute names to their
-                sensitivity level. Each value must be one of:
-                - "sensitive"
-                - "semi-sensitive"
-                - "not-sensitive"
+            query: The SPARQL query string to evaluate.
+            sensitivity_config: ``{attribute_name: sensitivity_level}``.
+                Each value must be one of "sensitive", "semi-sensitive",
+                or "not-sensitive".
+            sensitivity_bounds: ``{attribute_name: (min_value, max_value)}``.
+                Required by Rule R6 for SUM/AVG on semi-sensitive attributes.
 
         Returns:
-            Tuple[bool, str]: A tuple containing:
-                - bool: Whether the query is valid/successful.
-                - str: A result message describing the evaluation outcome.
+            Tuple of (is_valid, message, aggregate_info).
+            aggregate_info is a list of dicts with keys:
+                - "variable": projected variable name
+                - "function": one of "count", "sum", "avg"
+                - "attribute": ontology attribute name (or None for COUNT(*))
         """
+        if sensitivity_bounds is None:
+            sensitivity_bounds = {}
+
         # Classify attributes by sensitivity
         sensitive_attrs, semi_sensitive_attrs, not_sensitive_attrs = self._classify_attributes(
             sensitivity_config
@@ -52,7 +77,7 @@ class QueryEvaluationService:
             parsed = parseQuery(query)
             algebra = translateQuery(parsed)
         except Exception as e:
-            return False, f"Failed to parse SPARQL query: {str(e)}"
+            return False, f"Failed to parse SPARQL query: {str(e)}", []
 
         root = algebra.algebra
 
@@ -70,13 +95,16 @@ class QueryEvaluationService:
         # Step 4: Collect GROUP BY variables
         group_by_vars = self._collect_group_by_variables(root)
 
+        # Step 5: Collect detailed aggregate info (function + inner attribute)
+        aggregate_details = self._collect_aggregate_details(root)
+
         # ── Rule R1: Sensitive attributes must not appear anywhere ──
         for var, level in var_sensitivity.items():
             if level == "sensitive":
                 return False, (
                     f"Query rejected: sensitive attribute variable '?{var}' "
                     f"must not appear in the query."
-                )
+                ), []
 
         # ── Rule R2: Semi-sensitive attributes must not appear in FILTER ──
         for var in filter_vars:
@@ -85,7 +113,7 @@ class QueryEvaluationService:
                 return False, (
                     f"Query rejected: semi-sensitive attribute variable '?{var_name}' "
                     f"must not appear in a FILTER expression."
-                )
+                ), []
 
         # ── Rule R3: Semi-sensitive attributes in SELECT must be aggregated ──
         for var in select_vars:
@@ -95,22 +123,58 @@ class QueryEvaluationService:
                     return False, (
                         f"Query rejected: semi-sensitive attribute variable '?{var_name}' "
                         f"in SELECT must be inside an aggregate function (COUNT, AVG, etc.)."
-                    )
+                    ), []
 
         # ── Rule R4: At most one semi-sensitive attribute in GROUP BY ──
         semi_sensitive_in_group = [
             var for var in group_by_vars
             if var_sensitivity.get(str(var)) == "semi-sensitive"
         ]
-        if len(semi_sensitive_in_group) > 1:
+        if len(semi_sensitive_in_group) > max_semi_sensitive_group_by:
             names = ", ".join(f"?{v}" for v in semi_sensitive_in_group)
             return False, (
-                f"Query rejected: multiple semi-sensitive attributes ({names}) "
-                f"in GROUP BY creates quasi-identifier risk."
-            )
+                f"Query rejected: too many semi-sensitive attributes ({names}) "
+                f"in GROUP BY (max {max_semi_sensitive_group_by}) creates quasi-identifier risk."
+            ), []
 
-        logger.info("Query passed k-anonymity static analysis.")
-        return True, "Query is k-anonymity compliant."
+        # ── Rule R5: Block MIN/MAX/Sample/GroupConcat on semi-sensitive ──
+        for detail in aggregate_details:
+            inner_attr = detail.get("inner_attribute")
+            agg_func = detail["agg_function"]
+            if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
+                if agg_func in self._BLOCKED_AGGREGATES:
+                    return False, (
+                        f"Query rejected: {agg_func} on semi-sensitive attribute "
+                        f"'?{inner_attr}' is not allowed (Rule R5)."
+                    ), []
+
+        # ── Rule R6: SUM/AVG on semi-sensitive attrs require ontology bounds ──
+        for detail in aggregate_details:
+            inner_attr = detail.get("inner_attribute")
+            agg_func = detail["agg_function"]
+            if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
+                if agg_func in self._BOUNDS_REQUIRED_AGGREGATES:
+                    attr_lower = inner_attr.lower() if inner_attr else None
+                    bounds = sensitivity_bounds.get(inner_attr) or sensitivity_bounds.get(attr_lower)
+                    if bounds is None or bounds[0] is None or bounds[1] is None:
+                        return False, (
+                            f"Query rejected: {agg_func} on semi-sensitive attribute "
+                            f"'?{inner_attr}' requires min/max bounds in the ontology (Rule R6)."
+                        ), []
+
+        # Build aggregate_info list for downstream NoiseService
+        aggregate_info: List[Dict[str, Any]] = []
+        for detail in aggregate_details:
+            short_name = self._AGG_SHORT_NAMES.get(detail["agg_function"])
+            if short_name is not None:
+                aggregate_info.append({
+                    "variable": detail["alias_variable"],
+                    "function": short_name,
+                    "attribute": detail.get("inner_attribute"),
+                })
+
+        logger.info("Query passed static analysis (R1-R6).")
+        return True, "Query is compliant.", aggregate_info
 
     # ──────────────────────────────────────────────────────────────────────
     # Internal helpers
@@ -327,3 +391,108 @@ class QueryEvaluationService:
                     for item in child:
                         if isinstance(item, CompValue):
                             self._walk_group_by(item, group_vars)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Aggregate detail extraction (for Rules R5/R6 + downstream metadata)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _collect_aggregate_details(self, root) -> List[Dict[str, Any]]:
+        """Return a list of dicts describing each aggregate in the query.
+
+        Each dict has:
+            - ``agg_function``: algebra name (e.g. ``"Aggregate_Avg"``)
+            - ``alias_variable``: the projected alias variable name (str)
+            - ``inner_attribute``: the SPARQL variable inside the aggregate (str or None)
+
+        The rdflib algebra structure is:
+            Extend(var=?alias, expr=Variable('__agg_N__'))
+              └─ AggregateJoin(A=[Aggregate_X(vars=?attr, res=?__agg_N__)])
+
+        So we first collect aggregate info from AggregateJoin keyed by the
+        internal ``res`` variable, then walk Extend nodes to map each
+        user-facing alias to the corresponding aggregate.
+        """
+        # Pass 1: collect aggregates from AggregateJoin → {res_var: info}
+        agg_map: Dict[str, Dict[str, Any]] = {}
+        self._collect_agg_join_info(root, agg_map)
+
+        # Pass 2: walk Extend nodes to link alias variables
+        details: List[Dict[str, Any]] = []
+        self._link_extend_aliases(root, agg_map, details)
+
+        # If there are unlinked aggregates (no Extend above them), add them directly
+        linked_res_vars = {d.get("_res") for d in details}
+        for res_var, info in agg_map.items():
+            if res_var not in linked_res_vars:
+                details.append(info)
+
+        # Remove internal _res key from output
+        for d in details:
+            d.pop("_res", None)
+
+        return details
+
+    def _collect_agg_join_info(self, node, agg_map: Dict[str, Dict[str, Any]]):
+        """Walk the tree to find AggregateJoin nodes and collect aggregate info."""
+        if not isinstance(node, CompValue):
+            return
+
+        if node.name == "AggregateJoin":
+            aggs = node.get("A", [])
+            for agg in aggs:
+                if isinstance(agg, CompValue) and agg.name in self.AGGREGATE_FUNCTIONS:
+                    # Get the inner variable (the attribute being aggregated)
+                    vars_val = agg.get("vars")
+                    inner_attr = str(vars_val) if isinstance(vars_val, Variable) else None
+
+                    # Get the result variable (internal __agg_N__ reference)
+                    res_val = agg.get("res")
+                    res_var = str(res_val) if isinstance(res_val, Variable) else None
+
+                    info = {
+                        "agg_function": agg.name,
+                        "alias_variable": inner_attr,  # default, overwritten by Extend
+                        "inner_attribute": inner_attr,
+                    }
+                    if res_var:
+                        agg_map[res_var] = info
+
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._collect_agg_join_info(child, agg_map)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._collect_agg_join_info(item, agg_map)
+
+    def _link_extend_aliases(self, node, agg_map, details):
+        """Walk Extend nodes and link user-facing aliases to aggregate info."""
+        if not isinstance(node, CompValue):
+            return
+
+        if node.name == "Extend":
+            alias_var = node.get("var")
+            expr = node.get("expr")
+            alias_name = str(alias_var) if isinstance(alias_var, Variable) else None
+
+            # The expr is often just Variable('__agg_N__')
+            if isinstance(expr, Variable):
+                ref_name = str(expr)
+                if ref_name in agg_map:
+                    entry = dict(agg_map[ref_name])
+                    entry["alias_variable"] = alias_name or entry["alias_variable"]
+                    entry["_res"] = ref_name
+                    details.append(entry)
+
+        # Recurse into all children
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._link_extend_aliases(child, agg_map, details)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._link_extend_aliases(item, agg_map, details)
+
+

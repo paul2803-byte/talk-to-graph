@@ -7,6 +7,8 @@ class Attribute:
     name: str
     anonymization_type: str
     sensitivity_level: str
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
 
 @dataclass
 class OntologyObject:
