@@ -120,9 +120,9 @@ class NoiseService:
         bounds: Optional[Tuple[float, float]],
         epsilon: float,
     ) -> None:
-        """Δf(SUM) = max − min, so scale = (max − min) / ε."""
+        """Δf(SUM) = max - min, so scale = (max - min) / ε."""
         if bounds is None:
-            logger.error("No bounds for SUM variable '%s' – cannot add noise", var)
+            logger.error("No bounds for SUM variable '%s' - cannot add noise", var)
             return
         lo, hi = bounds
         sensitivity = hi - lo
@@ -143,17 +143,17 @@ class NoiseService:
         Split ε into ε/2 for noisy SUM and ε/2 for noisy COUNT, then
         return noisy_sum / noisy_count.  The true AVG value in each row
         is used as a proxy for the clipped SUM (since the query engine
-        already computed the average, we reconstruct: sum ≈ avg × count).
+        already computed the average, we reconstruct: sum ≈ avg * count).
 
         Because we do not have access to the per-record values at this
         stage, we add noise calibrated to the *clipped* sensitivity
         directly to the reported AVG and adjust by the noisy count.
 
-        Sensitivity of clipped SUM = max − min.
+        Sensitivity of clipped SUM = max - min.
         Sensitivity of COUNT       = 1.
         """
         if bounds is None:
-            logger.error("No bounds for AVG variable '%s' – cannot add noise", var)
+            logger.error("No bounds for AVG variable '%s' -cannot add noise", var)
             return
 
         lo, hi = bounds
