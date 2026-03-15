@@ -28,12 +28,13 @@ Strictly adhere to the provided ontology (usually in JSON-LD):
 - Prefix Declarations: Include all necessary namespaces.
 - Query Clauses: SELECT, WHERE, etc., must be syntactically correct for SPARQL 1.1.
 - Filters: Use FILTER for constraints.
+- Aggregation: When using AVG(...), always include a COUNT of the same grouping (e.g. COUNT(?x) AS ?count) in the SELECT clause. This is required for differential privacy noise calibration.
 
 4. Example
 If Ontology base is <https://example.org/> and includes Object1 with property gehalt:
 Query:
 PREFIX oyd: <https://example.org/>
-SELECT (AVG(?g) AS ?avg) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?g . }
+SELECT (AVG(?g) AS ?avg) (COUNT(?s) AS ?count) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?g . }
 """.strip()
 
 

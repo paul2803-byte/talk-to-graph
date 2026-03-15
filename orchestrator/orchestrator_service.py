@@ -179,18 +179,19 @@ class OrchestratorService:
             noisy_results, count_var, self._config.min_group_size
         )
 
-        # ── 10. Wrap in NoisyResult ────────────────────────────────────
+        # ── 10. Build and return response ─────────────────────────────
+        # Wrap in NoisyResult
         noisy_result = NoisyResult(rows=noisy_results, aggregate_info=aggregate_info)
 
-        # ── 11. Generate natural language response ─────────────────────
+        # Generate natural language response
         response_text = self.response_generator.generate_response(
             question, noisy_result
         )
 
-        # ── 12. Append assistant response to conversation history ──────
+        # Append assistant response to conversation history
         self.session_service.add_to_history(sid, "assistant", response_text)
 
-        # ── 13. Return new response shape ──────────────────────────────
+        # Return response
         return {
             "response": response_text,
             "sessionId": sid,

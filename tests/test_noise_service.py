@@ -58,7 +58,19 @@ class TestSumNoise:
 # ── AVG noise (clipped-mean) ──────────────────────────────────────────────
 
 class TestAvgNoise:
-    def test_noise_is_added_to_avg(self, service):
+    def test_noise_is_added_to_avg_with_count(self, service):
+        """When a COUNT column is present the clipped-mean path is used."""
+        rows = [{"avgSalary": 5000.0, "cnt": 100}]
+        agg = [
+            {"variable": "cnt", "function": "count", "attribute": None},
+            {"variable": "avgSalary", "function": "avg", "attribute": "gehalt"},
+        ]
+        bounds = {"gehalt": (1000.0, 10000.0)}
+        result = service.add_noise(rows, agg, bounds, epsilon_base=0.5)
+        assert result[0]["avgSalary"] != 5000.0
+
+    def test_avg_without_count_falls_back(self, service):
+        """Without a COUNT column the fallback (full-sensitivity noise) is used."""
         rows = [{"avgSalary": 5000.0}]
         agg = [{"variable": "avgSalary", "function": "avg", "attribute": "gehalt"}]
         bounds = {"gehalt": (1000.0, 10000.0)}
@@ -70,6 +82,37 @@ class TestAvgNoise:
         agg = [{"variable": "avgSalary", "function": "avg", "attribute": "gehalt"}]
         result = service.add_noise(rows, agg, {}, epsilon_base=0.5)
         assert result[0]["avgSalary"] == 5000.0
+
+    def test_clipped_mean_produces_reasonable_values(self):
+        """Over many draws the noisy mean should stay close to the true mean."""
+        svc = NoiseService(seed=123)
+        rows = [{"avg": 5000.0, "cnt": 200}] * 300
+        agg = [
+            {"variable": "cnt", "function": "count", "attribute": None},
+            {"variable": "avg", "function": "avg", "attribute": "gehalt"},
+        ]
+        bounds = {"gehalt": (1000.0, 10000.0)}
+        result = svc.add_noise(rows, agg, bounds, epsilon_base=1.0)
+        mean_noisy = sum(r["avg"] for r in result) / len(result)
+        assert abs(mean_noisy - 5000.0) < 500, (
+            f"Noisy mean {mean_noisy:.1f} deviates too far from 5000"
+        )
+
+    def test_count_not_double_noised_when_avg_present(self):
+        """When COUNT and AVG are both present, COUNT noise should be applied once."""
+        svc = NoiseService(seed=42)
+        rows = [{"avgSalary": 5000.0, "cnt": 100}] * 500
+        agg = [
+            {"variable": "cnt", "function": "count", "attribute": None},
+            {"variable": "avgSalary", "function": "avg", "attribute": "gehalt"},
+        ]
+        bounds = {"gehalt": (1000.0, 10000.0)}
+        result = svc.add_noise(rows, agg, bounds, epsilon_base=1.0)
+        # With ε=1, Lap(1/ε)=Lap(1), variance=2. Over 500 draws mean noise ≈ 0
+        mean_count_noise = sum(r["cnt"] - 100 for r in result) / len(result)
+        assert abs(mean_count_noise) < 2, (
+            f"Count noise mean {mean_count_noise:.2f} suggests double-noising"
+        )
 
 
 # ── Small-group suppression ──────────────────────────────────────────────
