@@ -147,7 +147,7 @@ class OrchestratorService:
                 "BUDGET_EXHAUSTED", sid, session.conversation_history
             )
 
-        # ── 6. Deduct budget BEFORE executing (plan review item 3.4) ───
+        # ── 6. Deduct budget BEFORE executing ───
         self.budget_service.deduct_budget(epsilon_query)
         self.session_service.add_epsilon_spent(sid, epsilon_query)
 
