@@ -56,6 +56,15 @@ class NoiseService:
         """
         noisy_results = [dict(row) for row in query_results]
 
+        # Snapshot the true counts before any noise is applied so that
+        # the AVG mechanism can reconstruct the clipped sum correctly.
+        true_counts: List[Optional[float]] = []
+        for row in noisy_results:
+            if count_var and count_var in row and row[count_var] is not None:
+                true_counts.append(float(row[count_var]))
+            else:
+                true_counts.append(None)
+
         for agg in aggregate_info:
             var = agg["variable"]
             func = agg["function"].lower()
@@ -68,7 +77,9 @@ class NoiseService:
                 self._add_sum_noise(noisy_results, var, bounds, epsilon_base)
             elif func == "avg":
                 bounds = attribute_bounds.get(attr) if attr else None
-                self._add_avg_noise_clipped_mean(noisy_results, var, bounds, epsilon_base)
+                self._add_avg_noise_clipped_mean(
+                    noisy_results, var, bounds, epsilon_base, count_var, true_counts
+                )
             else:
                 logger.warning("Unknown aggregate function '%s' – skipping noise for %s", func, var)
 
@@ -137,23 +148,25 @@ class NoiseService:
         var: str,
         bounds: Optional[Tuple[float, float]],
         epsilon: float,
+        true_counts: Optional[List[Optional[float]]] = None,
     ) -> None:
         """Clipped-mean mechanism for AVG.
 
         Split ε into ε/2 for noisy SUM and ε/2 for noisy COUNT, then
         return noisy_sum / noisy_count.  The true AVG value in each row
-        is used as a proxy for the clipped SUM (since the query engine
-        already computed the average, we reconstruct: sum ≈ avg * count).
+        is used together with the **true** (un-noised) group count to
+        reconstruct: clipped_sum = avg × true_count.  Independent
+        Laplace noise is added to both the reconstructed sum and count
+        before dividing.
 
-        Because we do not have access to the per-record values at this
-        stage, we add noise calibrated to the *clipped* sensitivity
-        directly to the reported AVG and adjust by the noisy count.
+        When no count column is available, the method falls back to
+        adding noise scaled to (max − min) / ε directly to the average.
 
         Sensitivity of clipped SUM = max - min.
         Sensitivity of COUNT       = 1.
         """
         if bounds is None:
-            logger.error("No bounds for AVG variable '%s' -cannot add noise", var)
+            logger.error("No bounds for AVG variable '%s' – cannot add noise", var)
             return
 
         lo, hi = bounds
@@ -164,11 +177,32 @@ class NoiseService:
         scale_sum = sensitivity_sum / eps_sum
         scale_count = 1.0 / eps_count
 
-        for row in rows:
+        for idx, row in enumerate(rows):
             if var in row and row[var] is not None:
                 true_avg = float(row[var])
-                # Clipped-mean mechanism: we add noise calibrated to the
-                # clipped range directly to the reported average.  The
-                # scale accounts for (max-min) sensitivity at ε/2.
-                noise = self._laplace(scale_sum)
-                row[var] = true_avg + noise
+
+                # Use the true (un-noised) count for sum reconstruction
+                n = true_counts[idx] if true_counts else None
+
+                if n is not None and n > 0:
+                    # Reconstruct clipped sum from true values, then
+                    # add independent noise to both sum and count
+                    clipped_sum = true_avg * n
+                    noisy_sum = clipped_sum + self._laplace(scale_sum)
+                    noisy_count = n + self._laplace(scale_count)
+
+                    # Guard against division by zero / negative noisy counts
+                    if noisy_count < 1.0:
+                        noisy_count = 1.0
+
+                    row[var] = noisy_sum / noisy_count
+                else:
+                    # Fallback: no count available — add noise scaled to
+                    # the full clipped range (conservative / over-noised,
+                    # but safe from a DP perspective).
+                    logger.warning(
+                        "No count column available for AVG variable '%s' "
+                        "– falling back to full-sensitivity noise", var
+                    )
+                    row[var] = true_avg + self._laplace(scale_sum)
+
