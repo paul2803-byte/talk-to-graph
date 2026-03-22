@@ -3,6 +3,7 @@ from typing import Any, Optional
 from orchestrator.fetch_ontology_service import FetchOntologyService
 from query_execution import QueryExecutionService
 from query_evaluation import QueryEvaluationService
+from query_generation.query_generation_service import generate_sparql_query
 from query_generation.response_generator import ResponseGenerator
 from privacy import NoiseService, PrivacyBudgetService
 from models.privacy_config import PrivacyConfig
@@ -100,13 +101,21 @@ class OrchestratorService:
 
         # ── 2. Generate SPARQL query ───────────────────────────────────
         try:
-            # sparql_query = generate_sparql_query(ontology_obj, question)
-            sparql_query = """
+            sparql_query = generate_sparql_query(ontology_obj, question)
+            # test queries for saving tokens during development
+            sparql_query_test = """
                 PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
-                SELECT (AVG(?gehalt) AS ?averageSalary)
+                SELECT (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?count)
                 WHERE {
                     ?s a oyd:Object1 ;
                     oyd:gehalt ?gehalt .
+                }
+            """
+            sparql_query_test2 = """
+                PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
+                SELECT ?salary WHERE { 
+                    ?s a oyd:Object1 ;
+                    oyd:gehalt ?salary .
                 }
             """
             logger.info("Generated SPARQL Query:\n%s", sparql_query)

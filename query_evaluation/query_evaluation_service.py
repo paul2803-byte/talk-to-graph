@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.algebra import CompValue
-from rdflib.term import Variable, URIRef
+from rdflib.term import Variable, URIRef, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,17 @@ class QueryEvaluationService:
         # Step 5: Collect detailed aggregate info (function + inner attribute)
         aggregate_details = self._collect_aggregate_details(root)
 
+        # ── Rule R7: Block concrete-subject access to sensitive/semi-sensitive ──
+        concrete_violations = self._detect_concrete_subject_access(
+            root, sensitive_attrs, semi_sensitive_attrs
+        )
+        if concrete_violations:
+            pred_name, level = concrete_violations[0]
+            return False, (
+                f"Query rejected: a specific individual is targeted via a concrete "
+                f"subject URI accessing {level} predicate '{pred_name}' (Rule R7)."
+            ), []
+
         # ── Rule R1: Sensitive attributes must not appear anywhere ──
         for var, level in var_sensitivity.items():
             if level == "sensitive":
@@ -112,6 +123,19 @@ class QueryEvaluationService:
                     f"Query rejected: semi-sensitive attribute variable '?{var_name}' "
                     f"must not appear in a FILTER expression."
                 ), []
+
+        # ── Rule R2b: Semi-sensitive predicates must not be constrained
+        #    by concrete literal values in WHERE patterns ──
+        literal_violations = self._detect_literal_constraints_on_semi_sensitive(
+            root, semi_sensitive_attrs
+        )
+        if literal_violations:
+            pred_name = literal_violations[0]
+            return False, (
+                f"Query rejected: semi-sensitive predicate '{pred_name}' is "
+                f"constrained by a concrete value in the WHERE clause. "
+                f"This is equivalent to a FILTER on semi-sensitive data (Rule R2)."
+            ), []
 
         # ── Rule R3: Semi-sensitive attributes in SELECT must be aggregated ──
         for var in select_vars:
@@ -160,6 +184,24 @@ class QueryEvaluationService:
                             f"'?{inner_attr}' requires min/max bounds in the ontology (Rule R6)."
                         ), []
 
+        # ── Rule R8: AVG/SUM on semi-sensitive requires COUNT in projection ──
+        has_semi_sensitive_agg = False
+        has_count = False
+        for detail in aggregate_details:
+            inner_attr = detail.get("inner_attribute")
+            agg_func = detail["agg_function"]
+            if agg_func == "Aggregate_Count":
+                has_count = True
+            if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
+                if agg_func in self._BOUNDS_REQUIRED_AGGREGATES:
+                    has_semi_sensitive_agg = True
+        if has_semi_sensitive_agg and not has_count:
+            return False, (
+                "Query rejected: queries using AVG or SUM on semi-sensitive "
+                "attributes must also include a COUNT aggregate to enable "
+                "small-group suppression (Rule R8)."
+            ), []
+
         # Build aggregate_info list for downstream NoiseService
         aggregate_info: List[Dict[str, Any]] = []
         for detail in aggregate_details:
@@ -171,7 +213,7 @@ class QueryEvaluationService:
                     "attribute": detail.get("inner_attribute"),
                 })
 
-        logger.info("Query passed static analysis (R1-R6).")
+        logger.info("Query passed static analysis (R1-R8).")
         return True, "Query is compliant.", aggregate_info
 
     # ──────────────────────────────────────────────────────────────────────
@@ -246,6 +288,77 @@ class QueryEvaluationService:
                     for item in child:
                         if isinstance(item, CompValue):
                             self._walk_triples(item, mapping, sensitive, semi_sensitive, not_sensitive)
+
+    def _detect_concrete_subject_access(
+        self, node, sensitive: Set[str], semi_sensitive: Set[str]
+    ) -> List[Tuple[str, str]]:
+        """Detect triple patterns where a concrete subject URI accesses a
+        sensitive or semi-sensitive predicate (Rule R7).
+
+        Returns a list of (predicate_local_name, sensitivity_level) tuples.
+        """
+        violations: List[Tuple[str, str]] = []
+        self._walk_concrete_subjects(node, sensitive, semi_sensitive, violations)
+        return violations
+
+    def _walk_concrete_subjects(self, node, sensitive, semi_sensitive, violations):
+        """Walk BGP triples looking for concrete (URIRef) subjects paired with
+        sensitive/semi-sensitive predicates."""
+        if isinstance(node, CompValue):
+            if node.name == "BGP":
+                for triple in node.get("triples", []):
+                    s, p, o = triple
+                    if isinstance(s, URIRef) and isinstance(p, URIRef):
+                        local = self._local_name(p).lower()
+                        if local in sensitive:
+                            violations.append((local, "sensitive"))
+                        elif local in semi_sensitive:
+                            violations.append((local, "semi-sensitive"))
+            for key in node.keys():
+                child = node[key]
+                if isinstance(child, CompValue):
+                    self._walk_concrete_subjects(child, sensitive, semi_sensitive, violations)
+                elif isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, CompValue):
+                            self._walk_concrete_subjects(child, sensitive, semi_sensitive, violations)
+
+    def _detect_literal_constraints_on_semi_sensitive(
+        self, node, semi_sensitive: Set[str]
+    ) -> List[str]:
+        """Detect triple patterns where a semi-sensitive predicate has a concrete
+        literal or URI value as the object (Rule R2 enhancement).
+
+        A pattern like ``?s oyd:alter 30`` constrains semi-sensitive data the
+        same way as ``FILTER(?alter = 30)`` and must be blocked.
+
+        Returns a list of predicate local names that are violated.
+        """
+        violations: List[str] = []
+        self._walk_literal_constraints(node, semi_sensitive, violations)
+        return violations
+
+    def _walk_literal_constraints(self, node, semi_sensitive, violations):
+        """Walk BGP triples looking for concrete (Literal/URIRef) objects on
+        semi-sensitive predicates."""
+        if isinstance(node, CompValue):
+            if node.name == "BGP":
+                for triple in node.get("triples", []):
+                    s, p, o = triple
+                    if isinstance(p, URIRef):
+                        local = self._local_name(p).lower()
+                        if local in semi_sensitive:
+                            # Object is a concrete value (not a variable)
+                            if not isinstance(o, Variable):
+                                violations.append(local)
+            for key in node.keys():
+                child = node[key]
+                if isinstance(child, CompValue):
+                    self._walk_literal_constraints(child, semi_sensitive, violations)
+                elif isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, CompValue):
+                            self._walk_literal_constraints(item, semi_sensitive, violations)
 
     def _collect_filter_variables(self, node) -> Set[Variable]:
         """Collect all variables referenced in FILTER expressions."""

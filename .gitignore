@@ -8,3 +8,4 @@ venv/
 ENV/
 env/
 implementation_plan.md
+test_data/

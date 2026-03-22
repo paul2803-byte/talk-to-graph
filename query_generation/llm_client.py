@@ -62,9 +62,8 @@ class LLMClient:
                 api_version=api_version,
             )
         elif self.provider == "google":
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            self._client = genai
+            from google import genai
+            self._client = genai.Client(api_key=self.api_key)
         else:
             raise LLMClientError(f"Unsupported LLM provider: {self.provider}")
 
@@ -91,13 +90,13 @@ class LLMClient:
                 return response.content[0].text
 
             elif self.provider == "google":
-                model = client.GenerativeModel(
-                    model_name=self.model,
-                    system_instruction=system_prompt,
-                )
-                response = model.generate_content(
-                    user_message,
-                    generation_config={"temperature": 0.1},
+                response = client.models.generate_content(
+                    model=self.model,
+                    contents=user_message,
+                    config={
+                        "system_instruction": system_prompt,
+                        "temperature": 0.1,
+                    },
                 )
                 return response.text
 
