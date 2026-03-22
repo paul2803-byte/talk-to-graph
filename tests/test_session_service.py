@@ -1,7 +1,7 @@
 """Tests for SessionService — session creation, history, and budget isolation."""
 
 import pytest
-from models.session_service import SessionService, Session
+from session.session_service import SessionService, Session
 
 
 @pytest.fixture

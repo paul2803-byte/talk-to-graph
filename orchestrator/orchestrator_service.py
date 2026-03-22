@@ -7,7 +7,7 @@ from query_generation.response_generator import ResponseGenerator
 from privacy import NoiseService, PrivacyBudgetService
 from models.privacy_config import PrivacyConfig
 from models.noisy_result import NoisyResult
-from models.session_service import SessionService
+from session import SessionService
 
 logger = logging.getLogger(__name__)
 
@@ -119,13 +119,11 @@ class OrchestratorService:
         # ── 3. Build sensitivity config and bounds from ontology ───────
         sensitivity_config = {}
         sensitivity_bounds = {}
-        attribute_bounds = {}
         for obj in ontology_obj.objects:
             for attr in obj.attributes:
                 sensitivity_config[attr.name] = attr.sensitivity_level
                 if attr.min_value is not None and attr.max_value is not None:
                     sensitivity_bounds[attr.name] = (attr.min_value, attr.max_value)
-                    attribute_bounds[attr.name] = (attr.min_value, attr.max_value)
 
         # ── 4. Static evaluation (R1-R6) ──────────────────────────────
         is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(
@@ -161,28 +159,19 @@ class OrchestratorService:
             )
 
         # ── 8. Add Laplace noise ───────────────────────────────────────
-        noisy_results = self.noise_service.add_noise(
+        noisy_result = self.noise_service.add_noise(
             query_results,
             aggregate_info,
-            attribute_bounds,
+            sensitivity_bounds,
             self._config.epsilon_base,
         )
 
         # ── 9. Suppress small groups (uses noisy counts) ──────────────
-        count_var = None
-        for agg in aggregate_info:
-            if agg["function"] == "count":
-                count_var = agg["variable"]
-                break
-
-        noisy_results = self.noise_service.suppress_small_groups(
-            noisy_results, count_var, self._config.min_group_size
+        noisy_result = self.noise_service.suppress_small_groups(
+            noisy_result, self._config.min_group_size
         )
 
         # ── 10. Build and return response ─────────────────────────────
-        # Wrap in NoisyResult
-        noisy_result = NoisyResult(rows=noisy_results, aggregate_info=aggregate_info)
-
         # Generate natural language response
         response_text = self.response_generator.generate_response(
             question, noisy_result
@@ -199,7 +188,7 @@ class OrchestratorService:
             "sessionEpsilonSpent": session.epsilon_spent,
             "status": "success",
             "data": {
-                "query_results": noisy_results,
+                "query_results": noisy_result.rows,
                 "sparql_query": sparql_query,
             },
             "conversationHistory": list(session.conversation_history),

@@ -6,8 +6,6 @@ from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.algebra import CompValue
 from rdflib.term import Variable, URIRef
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

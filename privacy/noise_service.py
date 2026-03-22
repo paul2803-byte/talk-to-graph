@@ -1,11 +1,8 @@
-"""Noise injection service implementing the Laplace mechanism for differential privacy."""
-
 import logging
-import math
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from models.noisy_result import NoisyResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +30,7 @@ class NoiseService:
         aggregate_info: List[Dict[str, str]],
         attribute_bounds: Dict[str, Tuple[float, float]],
         epsilon_base: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> NoisyResult:
         """Add Laplace noise to every aggregate column in *query_results*.
 
         Parameters
@@ -51,10 +48,15 @@ class NoiseService:
 
         Returns
         -------
-        A **new** list of result dicts with noise applied in-place to the
-        aggregate columns.
+        A **new** NoisyResult with noise applied to the aggregate columns.
         """
         noisy_results = [dict(row) for row in query_results]
+
+        count_var = None
+        for agg in aggregate_info:
+            if agg["function"] == "count":
+                count_var = agg["variable"]
+                break
 
         # Snapshot the true counts before any noise is applied so that
         # the AVG mechanism can reconstruct the clipped sum correctly.
@@ -78,36 +80,41 @@ class NoiseService:
             elif func == "avg":
                 bounds = attribute_bounds.get(attr) if attr else None
                 self._add_avg_noise_clipped_mean(
-                    noisy_results, var, bounds, epsilon_base, count_var, true_counts
+                    noisy_results, var, bounds, epsilon_base, true_counts
                 )
             else:
                 logger.warning("Unknown aggregate function '%s' – skipping noise for %s", func, var)
 
-        return noisy_results
+        return NoisyResult(rows=noisy_results, aggregate_info=aggregate_info)
 
     def suppress_small_groups(
         self,
-        query_results: List[Dict[str, Any]],
-        count_var: Optional[str],
+        noisy_result: NoisyResult,
         min_group_size: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> NoisyResult:
         """Remove rows whose **noisy** count is below *min_group_size*.
 
         This must be called **after** ``add_noise`` so that the count
         column already contains the noisy value.
         """
+        count_var = None
+        for agg in noisy_result.aggregate_info:
+            if agg["function"] == "count":
+                count_var = agg["variable"]
+                break
+
         if count_var is None:
-            return query_results
+            return noisy_result
 
         suppressed: List[Dict[str, Any]] = []
-        for row in query_results:
+        for row in noisy_result.rows:
             count_val = row.get(count_var)
             if count_val is not None and float(count_val) >= min_group_size:
                 suppressed.append(row)
             else:
                 logger.info("Suppressed group with noisy count %s (threshold %d)", count_val, min_group_size)
 
-        return suppressed
+        return NoisyResult(rows=suppressed, aggregate_info=noisy_result.aggregate_info)
 
     # ── private helpers ─────────────────────────────────────────────────
 
