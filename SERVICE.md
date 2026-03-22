@@ -12,7 +12,7 @@
 4. [Data Models](#data-models)
 5. [Environment Configuration](#environment-configuration)
 6. [API Endpoints](#api-endpoints)
-7. [Privacy Rules (R1–R6)](#privacy-rules-r1r6)
+7. [Privacy Rules (R1–R8)](#privacy-rules-r1r8)
 8. [Current Limitations & Open Tasks](#current-limitations--open-tasks)
 
 ---
@@ -205,7 +205,7 @@ Supports four providers via a unified `call(system_prompt, user_message) → str
 | `openai` | `openai.OpenAI` |
 | `anthropic` | `anthropic.Anthropic` |
 | `azure` | `openai.AzureOpenAI` |
-| `google` | `google.generativeai` |
+| `google` | `google.genai` |
 
 Configuration is read from `LLM_*` environment variables.
 
@@ -350,18 +350,20 @@ Health check.
 
 ---
 
-## Privacy Rules (R1–R6)
+## Privacy Rules (R1–R8)
 
 These rules are enforced by `QueryEvaluationService` through static analysis of the SPARQL algebra tree **before** execution:
 
 | Rule | Description |
 |------|-------------|
 | **R1** | **Sensitive attributes** must not appear anywhere in the query (SELECT, WHERE, FILTER). |
-| **R2** | **Semi-sensitive attributes** must not appear in `FILTER` expressions. |
+| **R2** | **Semi-sensitive attributes** must not appear in `FILTER` expressions **or** be constrained by concrete literal values in WHERE triple patterns (e.g. `?s oyd:alter 30` is treated the same as `FILTER(?alter = 30)`). |
 | **R3** | **Semi-sensitive attributes** in `SELECT` must be wrapped in an aggregate function (COUNT, AVG, SUM, etc.). |
 | **R4** | At most `MAX_SEMI_SENSITIVE_GROUP_BY` semi-sensitive attributes may appear in `GROUP BY` (prevents quasi-identifier creation). |
 | **R5** | `MIN`, `MAX`, `SAMPLE`, and `GROUP_CONCAT` are **blocked** on semi-sensitive attributes (these aggregates can reveal individual values). |
 | **R6** | `SUM` and `AVG` on semi-sensitive attributes **require** min/max bounds in the ontology overlay (needed to calibrate sensitivity for the Laplace mechanism). |
+| **R7** | Queries must not use **concrete subject URIs** (specific individuals) in triple patterns that access sensitive or semi-sensitive predicates. This prevents direct lookup of an individual's protected data. |
+| **R8** | Queries using `AVG` or `SUM` on semi-sensitive attributes must also include a `COUNT` aggregate. This enables small-group suppression to protect against quasi-identifier attacks via population narrowing. |
 
 ---
 

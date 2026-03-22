@@ -47,7 +47,7 @@ class TestRuleR5:
     def test_avg_on_semi_sensitive_allowed(self, service):
         query = """
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
-            SELECT (AVG(?gehalt) AS ?avgSalary)
+            SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
         ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
@@ -90,7 +90,7 @@ class TestRuleR6:
     def test_sum_with_bounds_allowed(self, service):
         query = """
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
-            SELECT (SUM(?gehalt) AS ?totalSalary)
+            SELECT (SUM(?gehalt) AS ?totalSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
         ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
@@ -103,7 +103,7 @@ class TestAggregateMetadata:
     def test_avg_metadata_returned(self, service):
         query = """
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
-            SELECT (AVG(?gehalt) AS ?avgSalary)
+            SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
         ok, _, agg_info = service.evaluate_query(query, SENSITIVITY, BOUNDS)
