@@ -68,17 +68,17 @@ def format_user_message(ontology: Ontology, question: str) -> str:
     for obj in ontology.objects:
         ontology_md += f"#### Class: {ontology.prefix}:{obj.name}\n"
         
-        datatybe_attrs = []
+        datatype_attrs = []
         
         for attr in obj.attributes:
-            datatybe_attrs.append(
+            datatype_attrs.append(
                 f"  - {ontology.prefix}:{attr.name} "
                 f"(Anonymization: {attr.anonymization_type}, "
                 f"Sensitivity: {attr.sensitivity_level})"
             )
         
-        if datatybe_attrs:
-            ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatybe_attrs) + "\n"
+        if datatype_attrs:
+            ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatype_attrs) + "\n"
         
         ontology_md += "\n"
 

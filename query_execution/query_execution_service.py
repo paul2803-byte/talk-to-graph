@@ -1,11 +1,8 @@
 import json
 import logging
 from typing import Any, Dict, List, Union
-from rdflib import Graph, plugin
-from rdflib.serializer import Serializer
+from rdflib import Graph
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class QueryExecutionService:

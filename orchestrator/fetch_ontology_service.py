@@ -98,7 +98,3 @@ class FetchOntologyService:
                 
         except requests.exceptions.RequestException as e:
             raise Exception(f"Failed to fetch ontology from {yaml_url}: {str(e)}")
-
-if __name__ == "__main__":
-    # Quick manual test block
-    service = FetchOntologyService()
