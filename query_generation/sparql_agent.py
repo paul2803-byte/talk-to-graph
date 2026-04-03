@@ -34,7 +34,7 @@ Strictly adhere to the provided ontology (usually in JSON-LD):
 If Ontology base is <https://example.org/> and includes Object1 with property gehalt:
 Query:
 PREFIX oyd: <https://example.org/>
-SELECT (AVG(?g) AS ?avg) (COUNT(?s) AS ?count) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?g . }
+SELECT (AVG(?gehalt) AS ?avg) (COUNT(?s) AS ?count) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt . }
 """.strip()
 
 
