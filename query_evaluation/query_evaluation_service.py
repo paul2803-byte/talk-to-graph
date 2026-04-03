@@ -80,7 +80,7 @@ class QueryEvaluationService:
         root = algebra.algebra
 
         # Step 1: Map SPARQL variables to sensitivity levels via triple patterns
-        var_sensitivity = self._map_variables_to_sensitivity(
+        var_sensitivity, var_to_attr = self._map_variables_to_sensitivity(
             root, sensitive_attrs, semi_sensitive_attrs, not_sensitive_attrs
         )
 
@@ -152,8 +152,10 @@ class QueryEvaluationService:
             agg_func = detail["agg_function"]
             if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
                 if agg_func in self._BOUNDS_REQUIRED_AGGREGATES:
-                    attr_lower = inner_attr.lower() if inner_attr else None
-                    bounds = sensitivity_bounds.get(inner_attr) or sensitivity_bounds.get(attr_lower)
+                    # Resolve SPARQL variable to ontology attribute name
+                    onto_attr = var_to_attr.get(inner_attr, inner_attr)
+                    onto_attr_lower = onto_attr.lower()
+                    bounds = sensitivity_bounds.get(onto_attr) or sensitivity_bounds.get(onto_attr_lower)
                     if bounds is None or bounds[0] is None or bounds[1] is None:
                         return False, (
                             f"Query rejected: {agg_func} on semi-sensitive attribute "
@@ -165,10 +167,16 @@ class QueryEvaluationService:
         for detail in aggregate_details:
             short_name = self._AGG_SHORT_NAMES.get(detail["agg_function"])
             if short_name is not None:
+                # Resolve SPARQL variable name → ontology attribute name
+                # so downstream services (e.g. NoiseService) can look up
+                # bounds by the canonical attribute name, not an LLM-chosen
+                # abbreviation like ?g for gehalt.
+                raw_attr = detail.get("inner_attribute")
+                resolved_attr = var_to_attr.get(raw_attr, raw_attr) if raw_attr else None
                 aggregate_info.append({
                     "variable": detail["alias_variable"],
                     "function": short_name,
-                    "attribute": detail.get("inner_attribute"),
+                    "attribute": resolved_attr,
                 })
 
         logger.info("Query passed static analysis (R1-R6).")
@@ -210,17 +218,22 @@ class QueryEvaluationService:
         sensitive: Set[str],
         semi_sensitive: Set[str],
         not_sensitive: Set[str],
-    ) -> Dict[str, str]:
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
         """
         Walk the algebra tree, find triple patterns of the form
             ?s <predicate> ?var
         and map ?var's name to a sensitivity level based on the predicate's local name.
+
+        Returns:
+            Tuple of (var_sensitivity, var_to_attr_name).
+            var_to_attr_name maps SPARQL variable names to ontology attribute names.
         """
         mapping: Dict[str, str] = {}
-        self._walk_triples(node, mapping, sensitive, semi_sensitive, not_sensitive)
-        return mapping
+        var_to_attr: Dict[str, str] = {}
+        self._walk_triples(node, mapping, var_to_attr, sensitive, semi_sensitive, not_sensitive)
+        return mapping, var_to_attr
 
-    def _walk_triples(self, node, mapping, sensitive, semi_sensitive, not_sensitive):
+    def _walk_triples(self, node, mapping, var_to_attr, sensitive, semi_sensitive, not_sensitive):
         """Recursively walk the algebra tree looking for triple patterns."""
         if isinstance(node, CompValue):
             if node.name == "BGP":
@@ -231,6 +244,7 @@ class QueryEvaluationService:
                         local = self._local_name(p).lower()
                         if isinstance(o, Variable):
                             var_name = str(o)
+                            var_to_attr[var_name] = self._local_name(p)
                             if local in sensitive:
                                 mapping[var_name] = "sensitive"
                             elif local in semi_sensitive:
@@ -241,11 +255,11 @@ class QueryEvaluationService:
             for key in node.keys():
                 child = node[key]
                 if isinstance(child, CompValue):
-                    self._walk_triples(child, mapping, sensitive, semi_sensitive, not_sensitive)
+                    self._walk_triples(child, mapping, var_to_attr, sensitive, semi_sensitive, not_sensitive)
                 elif isinstance(child, list):
                     for item in child:
                         if isinstance(item, CompValue):
-                            self._walk_triples(item, mapping, sensitive, semi_sensitive, not_sensitive)
+                            self._walk_triples(item, mapping, var_to_attr, sensitive, semi_sensitive, not_sensitive)
 
     def _collect_filter_variables(self, node) -> Set[Variable]:
         """Collect all variables referenced in FILTER expressions."""
