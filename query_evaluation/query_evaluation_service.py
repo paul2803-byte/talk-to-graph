@@ -413,14 +413,24 @@ class QueryEvaluationService:
         """
         Collect variables from the SELECT projection.
 
+        Recursively walks the algebra tree to find the Project node,
+        since the root may be a wrapper like SelectQuery.
+
         Returns:
             Tuple of (all_select_vars, aggregated_vars).
             aggregated_vars are variables that appear inside an aggregate function.
         """
         all_vars: Set[Variable] = set()
         aggregated_vars: Set[Variable] = set()
+        self._walk_select_variables(node, all_vars, aggregated_vars)
+        return all_vars, aggregated_vars
 
-        if isinstance(node, CompValue) and node.name == "Project":
+    def _walk_select_variables(self, node, all_vars: Set[Variable], aggregated_vars: Set[Variable]):
+        """Recursively walk the tree to find the Project node and extract projected variables."""
+        if not isinstance(node, CompValue):
+            return
+
+        if node.name == "Project":
             pv = node.get("PV", [])
             for v in pv:
                 if isinstance(v, Variable):
@@ -429,8 +439,17 @@ class QueryEvaluationService:
             # Check for Extend nodes (aliases from aggregates like (AVG(?x) AS ?avg))
             inner = node.get("p")
             self._check_aggregation_in_extend(inner, all_vars, aggregated_vars)
+            return
 
-        return all_vars, aggregated_vars
+        # Recurse into children to find the Project node
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._walk_select_variables(child, all_vars, aggregated_vars)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._walk_select_variables(item, all_vars, aggregated_vars)
 
     def _check_aggregation_in_extend(self, node, all_vars, aggregated_vars):
         """Walk Extend/AggregateJoin nodes to find which variables are aggregated."""

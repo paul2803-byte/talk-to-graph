@@ -3,7 +3,7 @@ from typing import Any, Optional
 from orchestrator.fetch_ontology_service import FetchOntologyService
 from query_execution import QueryExecutionService
 from query_evaluation import QueryEvaluationService
-from query_generation.query_generation_service import generate_sparql_query
+from query_generation import generate_sparql_query
 from query_generation.response_generator import ResponseGenerator
 from privacy import NoiseService, PrivacyBudgetService
 from models.privacy_config import PrivacyConfig
