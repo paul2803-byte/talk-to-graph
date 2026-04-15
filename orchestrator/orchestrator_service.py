@@ -74,6 +74,7 @@ class OrchestratorService:
         data: Any,
         ontology_url: str,
         session_id: Optional[str] = None,
+        epsilon: Optional[float] = None,
     ) -> dict:
         """
         Orchestration method to coordinate calls between different services.
@@ -146,8 +147,14 @@ class OrchestratorService:
             )
 
         # ── 5. Budget check ────────────────────────────────────────────
+        # Use user-supplied epsilon if provided, otherwise fall back to
+        # the configured default (epsilon_base).
+        epsilon_per_column = epsilon if epsilon is not None else self._config.epsilon_base
+
         num_agg_columns = len(aggregate_info)
-        epsilon_query = self.budget_service.calculate_query_cost(num_agg_columns)
+        epsilon_query = self.budget_service.calculate_query_cost(
+            num_agg_columns, epsilon_override=epsilon_per_column
+        )
 
         if not self.budget_service.check_budget(epsilon_query):
             return self._error_response(
@@ -172,7 +179,7 @@ class OrchestratorService:
             query_results,
             aggregate_info,
             sensitivity_bounds,
-            self._config.epsilon_base,
+            epsilon_per_column,
         )
 
         # ── 9. Suppress small groups (uses noisy counts) ──────────────
@@ -195,6 +202,7 @@ class OrchestratorService:
             "sessionId": sid,
             "remainingPrivacyBudget": self.budget_service.get_remaining(),
             "sessionEpsilonSpent": session.epsilon_spent,
+            "epsilonUsed": epsilon_per_column,
             "status": "success",
             "data": {
                 "query_results": noisy_result.rows,

@@ -53,6 +53,7 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
 | `data` | `object` | No (default `{}`) | JSON-LD data payload to query against. |
 | `ontology_url` | `string` | **Yes** | URL of the SOYA ontology endpoint (the service appends `/yaml` internally). |
 | `sessionId` | `string` | No | UUID of an existing session. Omit or set to `null` to start a new session. |
+| `epsilon` | `number` | No | Per-column ε value for this query. Must be a positive number. When omitted the server default (`EPSILON_BASE` env variable) is used. A higher value means more budget consumed but less noise; a lower value means less budget consumed but more noise. The global budget check still applies — the request is rejected with `BUDGET_EXHAUSTED` if the remaining budget is insufficient. |
 
 ### Request Example
 
@@ -71,7 +72,8 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
     ]
   },
   "ontology_url": "https://soya.ownyourdata.eu/AnonymisationDemo2",
-  "sessionId": "c7f3b2a1-9d4e-4f8a-b6c1-2e5d7a3f9b0e"
+  "sessionId": "c7f3b2a1-9d4e-4f8a-b6c1-2e5d7a3f9b0e",
+  "epsilon": 0.05
 }
 ```
 
@@ -83,6 +85,7 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
   "sessionId": "c7f3b2a1-9d4e-4f8a-b6c1-2e5d7a3f9b0e",
   "remainingPrivacyBudget": 0.9,
   "sessionEpsilonSpent": 0.1,
+  "epsilonUsed": 0.05,
   "status": "success",
   "data": {
     "query_results": [
@@ -105,6 +108,7 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
 | `sessionId` | `string` | UUID v4 identifying the session. Store this to continue multi-turn conversations. |
 | `remainingPrivacyBudget` | `number` | Remaining global ε budget after this query. Reaches `0` when no more queries can be answered. |
 | `sessionEpsilonSpent` | `number` | Cumulative ε consumed by this session so far. |
+| `epsilonUsed` | `number` | The per-column ε value that was applied for this query. Equals the requested `epsilon` if one was provided, otherwise equals the server default (`EPSILON_BASE`). |
 | `status` | `string` | `"success"` on a successful query. |
 | `data` | `object` | Contains the raw query results and the generated SPARQL query. |
 | `data.query_results` | `array<object>` | Noisy result rows. Each object maps column names to their noisy values (`number` or `string`). |
@@ -151,6 +155,7 @@ The service returns `200` with `"status": "error"` for **pipeline errors** (onto
 | `400 Bad Request` | Missing request body | `{ "error": "Request body is required", "status": "error" }` |
 | `400 Bad Request` | Missing `question` field | `{ "error": "Question is required", "status": "error" }` |
 | `400 Bad Request` | Missing `ontology_url` field | `{ "error": "Ontology URL is required", "status": "error" }` |
+| `400 Bad Request` | Invalid `epsilon` (not a number or ≤ 0) | `{ "error": "epsilon must be a positive number", "status": "error" }` |
 | `500 Internal Server Error` | Unhandled server exception | `{ "error": "An internal error occurred.", "status": "error" }` |
 
 ---

@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from models.privacy_config import PrivacyConfig
 
 logger = logging.getLogger(__name__)
@@ -17,11 +18,20 @@ class PrivacyBudgetService:
 
     # ── public API ──────────────────────────────────────────────────────
 
-    def calculate_query_cost(self, num_aggregate_columns: int) -> float:
-        """Return the ε cost for a query with *num_aggregate_columns* aggregates."""
+    def calculate_query_cost(
+        self,
+        num_aggregate_columns: int,
+        epsilon_override: Optional[float] = None,
+    ) -> float:
+        """Return the ε cost for a query with *num_aggregate_columns* aggregates.
+
+        If *epsilon_override* is provided it is used as the per-column ε
+        instead of the configured ``epsilon_base``.
+        """
         if num_aggregate_columns <= 0:
             return 0.0
-        return self._config.epsilon_base * num_aggregate_columns
+        eps = epsilon_override if epsilon_override is not None else self._config.epsilon_base
+        return eps * num_aggregate_columns
 
     def check_budget(self, epsilon_query: float) -> bool:
         """Return True if the remaining budget can cover *epsilon_query*."""

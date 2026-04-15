@@ -38,15 +38,23 @@ def talk_to_data():
     data_payload = request_data.get("data", {})
     ontology_url = request_data.get("ontology_url")
     session_id = request_data.get("sessionId")
+    epsilon = request_data.get("epsilon")
 
     if not question:
         return jsonify({"error": "Question is required", "status": "error"}), 400
     if ontology_url is None:
         return jsonify({"error": "Ontology URL is required", "status": "error"}), 400
+    if epsilon is not None:
+        try:
+            epsilon = float(epsilon)
+        except (TypeError, ValueError):
+            return jsonify({"error": "epsilon must be a number", "status": "error"}), 400
+        if epsilon <= 0:
+            return jsonify({"error": "epsilon must be a positive number", "status": "error"}), 400
 
     try:
         result = orchestrator_service.talk_to_data(
-            question, data_payload, ontology_url, session_id=session_id
+            question, data_payload, ontology_url, session_id=session_id, epsilon=epsilon
         )
         return jsonify(result)
     except Exception as e:

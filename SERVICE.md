@@ -68,7 +68,7 @@ The orchestrator (`OrchestratorService.talk_to_data`) executes the following pip
 | 2 | **Generate SPARQL** — send ontology + question to an LLM to produce a SPARQL query | `QueryGenerator` _(currently hardcoded)_ | Return `QUERY_GENERATION_FAILED` |
 | 3 | **Build sensitivity config** — extract per-attribute sensitivity levels and bounds (min/max) from the ontology | Inline in orchestrator | — |
 | 4 | **Static evaluation (R1–R6)** — parse the SPARQL algebra tree and check six privacy rules | `QueryEvaluationService` | Return `QUERY_REJECTED` |
-| 5 | **Budget check** — compute ε cost (`epsilon_base × num_aggregate_columns`) and verify there is enough remaining budget | `PrivacyBudgetService` | Return `BUDGET_EXHAUSTED` |
+| 5 | **Budget check** — compute ε cost (`epsilon_per_column × num_aggregate_columns`) and verify there is enough remaining budget. The per-column ε can be overridden by the caller via the `epsilon` request parameter; otherwise `epsilon_base` is used | `PrivacyBudgetService` | Return `BUDGET_EXHAUSTED` |
 | 6 | **Deduct budget** — subtract the query cost from the global budget and add it to the session's `epsilon_spent` | `PrivacyBudgetService` / `SessionService` | — |
 | 7 | **Execute query** — run the SPARQL query against the JSON-LD data using `rdflib` | `QueryExecutionService` | Return `QUERY_EXECUTION_FAILED` |
 | 8 | **Add Laplace noise** — inject calibrated noise into each aggregate column (COUNT, SUM, AVG) | `NoiseService` | — |
@@ -135,7 +135,8 @@ talk-to-data-service/
   "question": "What is the average salary?",
   "data": { },
   "ontology_url": "https://soya.ownyourdata.eu/AnonymisationDemo2",
-  "sessionId": "optional-uuid"
+  "sessionId": "optional-uuid",
+  "epsilon": 0.05
 }
 ```
 
@@ -147,6 +148,7 @@ talk-to-data-service/
   "sessionId": "uuid-v4",
   "remainingPrivacyBudget": 0.8,
   "sessionEpsilonSpent": 0.1,
+  "epsilonUsed": 0.05,
   "status": "success",
   "data": {
     "query_results": [ { "averageSalary": 45321.78 } ],
@@ -171,7 +173,7 @@ Key methods:
 
 | Method | Purpose |
 |--------|---------|
-| `talk_to_data(question, data, ontology_url, session_id)` | Runs the full pipeline and returns the response dict |
+| `talk_to_data(question, data, ontology_url, session_id, epsilon)` | Runs the full pipeline and returns the response dict. The optional `epsilon` overrides the per-column privacy budget for this query. |
 | `_error_response(error_code, session_id, conversation_history)` | Builds a standardised error response with a user-safe message |
 
 ---
@@ -262,7 +264,7 @@ Uses `numpy` for random number generation with an optional seed for reproducible
 
 Tracks a **global** ε budget (shared across all sessions). Key operations:
 
-- `calculate_query_cost(num_aggregate_columns)` → `epsilon_base × num_columns`
+- `calculate_query_cost(num_aggregate_columns, epsilon_override=None)` → `epsilon × num_columns` (uses `epsilon_override` if provided, otherwise `epsilon_base`)
 - `check_budget(epsilon_query)` → `True` if enough budget remains
 - `deduct_budget(epsilon_query)` → subtracts from remaining budget
 - `reset()` → resets spent budget (for testing only)
@@ -322,7 +324,7 @@ In-memory session store keyed by UUIDv4. Each session tracks conversation histor
 | `RESPONSE_LLM_MODEL` | _(falls back to `LLM_MODEL`)_ | Override model for NL response generation |
 | `RESPONSE_LLM_API_KEY` | _(falls back to `LLM_API_KEY`)_ | Override API key for NL response generation |
 | `EPSILON_TOTAL` | `1.0` | Total global privacy budget |
-| `EPSILON_BASE` | `0.1` | ε cost per aggregate column in a query |
+| `EPSILON_BASE` | `0.1` | Default ε cost per aggregate column in a query (used when the caller does not provide an explicit `epsilon`) |
 | `MIN_GROUP_SIZE` | `5` | Minimum noisy count to keep a group (suppression threshold) |
 | `MAX_SEMI_SENSITIVE_GROUP_BY` | `1` | Max semi-sensitive attributes allowed in GROUP BY |
 | `AZURE_OPENAI_ENDPOINT` | — | Required when `LLM_PROVIDER=azure` |
@@ -334,7 +336,7 @@ In-memory session store keyed by UUIDv4. Each session tracks conversation histor
 
 ### `POST /api/talk-to-data`
 
-The main endpoint. Accepts `question`, `data` (JSON-LD), `ontology_url`, and optional `sessionId`. Returns the noisy answer, session metadata, and remaining budget.
+The main endpoint. Accepts `question`, `data` (JSON-LD), `ontology_url`, optional `sessionId`, and optional `epsilon` (per-column privacy budget override). Returns the noisy answer, session metadata, and remaining budget.
 
 ### `GET /api/privacy-budget`
 
