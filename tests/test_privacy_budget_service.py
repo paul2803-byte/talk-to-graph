@@ -24,6 +24,17 @@ class TestCalculateQueryCost:
     def test_zero_columns(self, service):
         assert service.calculate_query_cost(0) == 0.0
 
+    def test_epsilon_override_single_column(self, service):
+        """User-supplied epsilon should replace the default epsilon_base."""
+        assert service.calculate_query_cost(1, epsilon_override=0.05) == pytest.approx(0.05)
+
+    def test_epsilon_override_multiple_columns(self, service):
+        assert service.calculate_query_cost(3, epsilon_override=0.2) == pytest.approx(0.6)
+
+    def test_epsilon_override_none_uses_default(self, service):
+        """Passing None should behave the same as omitting the argument."""
+        assert service.calculate_query_cost(2, epsilon_override=None) == pytest.approx(0.2)
+
 
 class TestBudgetChecking:
     def test_check_budget_ok(self, service):
