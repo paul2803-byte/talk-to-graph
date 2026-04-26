@@ -138,10 +138,12 @@ class QueryEvaluationService:
             ), []
 
         # ── Rule R3: Semi-sensitive attributes in SELECT must be aggregated ──
+        # Exception: variables that appear in GROUP BY are grouping keys,
+        # not raw-data exposure.  Their risk is managed by Rule R4 instead.
         for var in select_vars:
             var_name = str(var)
             if var_sensitivity.get(var_name) == "semi-sensitive":
-                if var not in aggregated_vars:
+                if var not in aggregated_vars and var not in group_by_vars:
                     return False, (
                         f"Query rejected: semi-sensitive attribute variable '?{var_name}' "
                         f"in SELECT must be inside an aggregate function (COUNT, AVG, etc.)."
@@ -160,11 +162,18 @@ class QueryEvaluationService:
             ), []
 
         # ── Rule R5: Block MIN/MAX/Sample/GroupConcat on semi-sensitive ──
+        # Note: rdflib uses Aggregate_Sample internally as a pass-through
+        # for GROUP BY variables projected in SELECT.  We must NOT block
+        # that synthetic usage — only explicit user-requested SAMPLE.
+        group_by_var_names = {str(v) for v in group_by_vars}
         for detail in aggregate_details:
             inner_attr = detail.get("inner_attribute")
             agg_func = detail["agg_function"]
             if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
                 if agg_func in self._BLOCKED_AGGREGATES:
+                    # Skip synthetic Aggregate_Sample for GROUP BY keys
+                    if agg_func == "Aggregate_Sample" and inner_attr in group_by_var_names:
+                        continue
                     return False, (
                         f"Query rejected: {agg_func} on semi-sensitive attribute "
                         f"'?{inner_attr}' is not allowed (Rule R5)."

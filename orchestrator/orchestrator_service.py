@@ -129,11 +129,20 @@ class OrchestratorService:
         # ── 3. Build sensitivity config and bounds from ontology ───────
         sensitivity_config = {}
         sensitivity_bounds = {}
+
+        def _register_attr(attr):
+            """Register an attribute and recursively its children."""
+            if attr.name not in sensitivity_config:
+                sensitivity_config[attr.name] = attr.sensitivity_level
+            if attr.min_value is not None and attr.max_value is not None:
+                if attr.name not in sensitivity_bounds:
+                    sensitivity_bounds[attr.name] = (attr.min_value, attr.max_value)
+            for child in attr.children:
+                _register_attr(child)
+
         for obj in ontology_obj.objects:
             for attr in obj.attributes:
-                sensitivity_config[attr.name] = attr.sensitivity_level
-                if attr.min_value is not None and attr.max_value is not None:
-                    sensitivity_bounds[attr.name] = (attr.min_value, attr.max_value)
+                _register_attr(attr)
 
         # ── 4. Static evaluation (R1-R6) ──────────────────────────────
         is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(

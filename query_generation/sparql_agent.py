@@ -71,11 +71,25 @@ def format_user_message(ontology: Ontology, question: str) -> str:
         datatype_attrs = []
         
         for attr in obj.attributes:
-            datatype_attrs.append(
-                f"  - {ontology.prefix}:{attr.name} "
-                f"(Anonymization: {attr.anonymization_type}, "
-                f"Sensitivity: {attr.sensitivity_level})"
-            )
+            if attr.is_composite and attr.children:
+                datatype_attrs.append(
+                    f"  - {ontology.prefix}:{attr.name} "
+                    f"(Type: {attr.attr_type}, "
+                    f"Anonymization: {attr.anonymization_type}, "
+                    f"Sensitivity: {attr.sensitivity_level})"
+                )
+                for child in attr.children:
+                    datatype_attrs.append(
+                        f"    - {ontology.prefix}:{child.name} "
+                        f"(Sensitivity: {child.sensitivity_level}, "
+                        f"inherited from {attr.name})"
+                    )
+            else:
+                datatype_attrs.append(
+                    f"  - {ontology.prefix}:{attr.name} "
+                    f"(Anonymization: {attr.anonymization_type}, "
+                    f"Sensitivity: {attr.sensitivity_level})"
+                )
         
         if datatype_attrs:
             ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatype_attrs) + "\n"
