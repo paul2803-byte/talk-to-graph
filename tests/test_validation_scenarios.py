@@ -52,6 +52,16 @@ SENSITIVITY_BOUNDS: Dict[str, Tuple[float, float]] = {
     "koerpergroesse":  (50.0, 250.0),
 }
 
+SENSITIVITY_NUMBER_BUCKETS: Dict[str, int] = {
+    "gehalt": 20,
+    "gewicht": 10,
+    "koerpergroesse": 10,
+}
+
+SENSITIVITY_DATE_GRANULARITY: Dict[str, str] = {
+    "geburtsdatum": "DECADE",
+}
+
 
 # ── Helper ──────────────────────────────────────────────────────────────
 
@@ -69,6 +79,8 @@ def run_validation(
     scenarios: List[ValidationScenario],
     sensitivity_config: Dict[str, str] = SENSITIVITY_CONFIG,
     sensitivity_bounds: Dict[str, Tuple[float, float]] = SENSITIVITY_BOUNDS,
+    sensitivity_number_buckets: Dict[str, int] = SENSITIVITY_NUMBER_BUCKETS,
+    sensitivity_date_granularity: Dict[str, str] = SENSITIVITY_DATE_GRANULARITY,
 ) -> List[dict]:
     """Run each scenario through QueryEvaluationService and return results."""
     service = QueryEvaluationService()
@@ -78,6 +90,9 @@ def run_validation(
             sc.sparql,
             sensitivity_config,
             sensitivity_bounds,
+            max_semi_sensitive_group_by=1,
+            sensitivity_number_buckets=sensitivity_number_buckets,
+            sensitivity_date_granularity=sensitivity_date_granularity,
         )
         results.append({
             "id": sc.id,
@@ -164,20 +179,20 @@ USER_SCENARIOS = [
         sparql=f"""
             PREFIX oyd: <{NAMESPACE}>
             PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-            SELECT ?geburtsdatum (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?cnt)
+            SELECT ?decade (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?cnt)
             WHERE {{
                 ?s a oyd:AnonymisationDemo ;
                    oyd:gehalt ?gehalt ;
                    oyd:geburtsdatum ?geburtsdatum .
+                BIND(FLOOR(YEAR(?geburtsdatum) / 10) AS ?decade)
             }}
-            GROUP BY ?geburtsdatum
+            GROUP BY ?decade
         """,
         expected_allowed=True,
         note=(
-            "GROUP BY on ?geburtsdatum (semi-sensitive) with ?gehalt (semi-sensitive) "
-            "in aggregate. geburtsdatum appears in SELECT as a GROUP BY key (R3 exempt), "
-            "and only 1 semi-sensitive in GROUP BY (R4 allows max 1). "
-            "Now ALLOWED — GROUP BY keys are controlled by R4, not R3."
+            "GROUP BY on ?decade derived from ?geburtsdatum natively with count. "
+            "Satisfies Rule R9 for date_granularity DECADE. "
+            "Now ALLOWED — GROUP BY keys are controlled by R4/R9."
         ),
     ),
     ValidationScenario(
@@ -329,6 +344,22 @@ ADDITIONAL_SCENARIOS = [
         expected_allowed=True,
         note="SUM on semi-sensitive with bounds + COUNT, GROUP BY state (semi-sensitive, inherited from adresse). 1 semi-sensitive in GROUP BY → allowed.",
     ),
+    ValidationScenario(
+        id="A6",
+        natural_language="What is the total gehalt per 10k bucket?",
+        sparql=f"""
+            PREFIX oyd: <{NAMESPACE}>
+            SELECT ?bucket_gehalt (SUM(?gehalt) AS ?total_gehalt) (COUNT(?s) AS ?cnt)
+            WHERE {{
+                ?s a oyd:AnonymisationDemo ;
+                   oyd:gehalt ?gehalt .
+                BIND(FLOOR(?gehalt / 10000) AS ?bucket_gehalt)
+            }}
+            GROUP BY ?bucket_gehalt
+        """,
+        expected_allowed=True,
+        note="Valid DP bucketing for numeric attribute gehalt (max=200000, min=0, 20 buckets) -> size 10000. Rule R9 accepts.",
+    ),
 
     # ── Should be REJECTED ──
     ValidationScenario(
@@ -454,6 +485,37 @@ ADDITIONAL_SCENARIOS = [
         expected_allowed=False,
         note="AVG on semi-sensitive without COUNT → R8.",
     ),
+    ValidationScenario(
+        id="R9",
+        natural_language="What is the total gehalt per 500 bucket?",
+        sparql=f"""
+            PREFIX oyd: <{NAMESPACE}>
+            SELECT ?bucket_gehalt (SUM(?gehalt) AS ?total_gehalt) (COUNT(?s) AS ?cnt)
+            WHERE {{
+                ?s a oyd:AnonymisationDemo ;
+                   oyd:gehalt ?gehalt .
+                BIND(FLOOR(?gehalt / 500) AS ?bucket_gehalt)
+            }}
+            GROUP BY ?bucket_gehalt
+        """,
+        expected_allowed=False,
+        note="Invalid DP bucketing size for gehalt (expected 10000). Blocked by Rule R9.",
+    ),
+    ValidationScenario(
+        id="R10",
+        natural_language="What is the total gehalt grouped exactly by gehalt?",
+        sparql=f"""
+            PREFIX oyd: <{NAMESPACE}>
+            SELECT ?gehalt (SUM(?gehalt) AS ?total_gehalt) (COUNT(?s) AS ?cnt)
+            WHERE {{
+                ?s a oyd:AnonymisationDemo ;
+                   oyd:gehalt ?gehalt .
+            }}
+            GROUP BY ?gehalt
+        """,
+        expected_allowed=False,
+        note="Raw grouping of metric variable that requires bucketing. Blocked by Rule R9.",
+    ),
 
     # ── Composite sensitivity inheritance scenarios ──
     ValidationScenario(
@@ -521,6 +583,9 @@ def test_validation_scenario(service, scenario: ValidationScenario):
         scenario.sparql,
         SENSITIVITY_CONFIG,
         SENSITIVITY_BOUNDS,
+        max_semi_sensitive_group_by=1,
+        sensitivity_number_buckets=SENSITIVITY_NUMBER_BUCKETS,
+        sensitivity_date_granularity=SENSITIVITY_DATE_GRANULARITY,
     )
     assert is_valid == scenario.expected_allowed, (
         f"[{scenario.id}] {scenario.natural_language}\n"

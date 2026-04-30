@@ -29,6 +29,9 @@ Strictly adhere to the provided ontology (usually in JSON-LD):
 - Query Clauses: SELECT, WHERE, etc., must be syntactically correct for SPARQL 1.1.
 - Filters: Use FILTER for constraints.
 - Aggregation: When using AVG(...), always include a COUNT of the same grouping (e.g. COUNT(?x) AS ?count) in the SELECT clause. This is required for differential privacy noise calibration.
+- DP Grouping (Bucketing): When grouping by a metric semi-sensitive attribute, you MUST apply bucketing unless the user explicitly requests a custom size. 
+    1. Numeric attributes: calculate the exact bucket size as `(max_value - min_value) / number_buckets` based on the provided ontology constraints. Use standard syntax: `BIND(FLOOR(?attribute / bucket_size) AS ?bucket_attribute)` and group by that alias.
+    2. Date attributes: use native SPARQL time grouping based on the provided `date_granularity`. E.g., for YEAR use `BIND(YEAR(?date) AS ?bucket_date)`. For DECADE use `BIND(FLOOR(YEAR(?date) / 10) AS ?bucket_date)`.
 
 4. Example
 If Ontology base is <https://example.org/> and includes Object1 with property gehalt:
@@ -71,12 +74,20 @@ def format_user_message(ontology: Ontology, question: str) -> str:
         datatype_attrs = []
         
         for attr in obj.attributes:
+            extra_details = f"Sensitivity: {attr.sensitivity_level}"
+            if attr.min_value is not None and attr.max_value is not None:
+                extra_details += f", min_value: {attr.min_value}, max_value: {attr.max_value}"
+            if attr.number_buckets is not None:
+                extra_details += f", number_buckets: {attr.number_buckets}"
+            if attr.date_granularity is not None:
+                extra_details += f", date_granularity: {attr.date_granularity}"
+
             if attr.is_composite and attr.children:
                 datatype_attrs.append(
                     f"  - {ontology.prefix}:{attr.name} "
                     f"(Type: {attr.attr_type}, "
                     f"Anonymization: {attr.anonymization_type}, "
-                    f"Sensitivity: {attr.sensitivity_level})"
+                    f"{extra_details})"
                 )
                 for child in attr.children:
                     datatype_attrs.append(
@@ -88,7 +99,7 @@ def format_user_message(ontology: Ontology, question: str) -> str:
                 datatype_attrs.append(
                     f"  - {ontology.prefix}:{attr.name} "
                     f"(Anonymization: {attr.anonymization_type}, "
-                    f"Sensitivity: {attr.sensitivity_level})"
+                    f"{extra_details})"
                 )
         
         if datatype_attrs:

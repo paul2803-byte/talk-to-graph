@@ -22,6 +22,8 @@ class Attribute:
             defined.
         min_value: Lower bound for numeric attributes (used for DP noise).
         max_value: Upper bound for numeric attributes (used for DP noise).
+        number_buckets: Number of buckets for numeric grouping.
+        date_granularity: Granularity for date grouping (e.g., 'YEAR', 'DECADE').
     """
     name: str
     anonymization_type: str
@@ -32,6 +34,8 @@ class Attribute:
     generalization_order: Optional[int] = None
     min_value: Optional[float] = None
     max_value: Optional[float] = None
+    number_buckets: Optional[int] = None
+    date_granularity: Optional[str] = None
 
 @dataclass
 class OntologyObject:
