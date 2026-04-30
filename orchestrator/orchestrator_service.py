@@ -89,11 +89,13 @@ class OrchestratorService:
         sid = session.session_id
 
         # Record user question
+        logger.info("Received question for session %s: %s", sid, question)
         self.session_service.add_to_history(sid, "user", question)
 
         # ── 1. Fetch ontology ──────────────────────────────────────────
         try:
             ontology_obj = self.fetch_service.fetch_ontology(ontology_url)
+            logger.info("Fetched ontology successfully.")
         except Exception as e:
             logger.error("Ontology fetch failed: %s", e)
             return self._error_response(
@@ -119,7 +121,8 @@ class OrchestratorService:
                     oyd:gehalt ?salary .
                 }
             """
-            logger.info("Generated SPARQL Query:\n%s", sparql_query)
+            logger.debug("Generated SPARQL Query:\n%s", sparql_query)
+            logger.info("Generated SPARQL query successfully.")
         except Exception as e:
             logger.error("SPARQL generation failed: %s", e)
             return self._error_response(
@@ -173,10 +176,12 @@ class OrchestratorService:
         # ── 6. Deduct budget BEFORE executing ───
         self.budget_service.deduct_budget(epsilon_query)
         self.session_service.add_epsilon_spent(sid, epsilon_query)
+        logger.info("Privacy budget check passed. Deducted %s.", epsilon_query)
 
         # ── 7. Execute query ───────────────────────────────────────────
         try:
             query_results = self.execution_service.execute_sparql_query(sparql_query, data)
+            logger.info("Query executed successfully. Returned %s rows.", len(query_results))
         except Exception as e:
             logger.error("Query execution failed: %s", e)
             return self._error_response(
@@ -195,12 +200,14 @@ class OrchestratorService:
         noisy_result = self.noise_service.suppress_small_groups(
             noisy_result, self._config.min_group_size
         )
+        logger.info("Applied Laplace noise and suppressed small groups.")
 
         # ── 10. Build and return response ─────────────────────────────
         # Generate natural language response
         response_text = self.response_generator.generate_response(
             question, noisy_result
         )
+        logger.info("Generated natural language response successfully.")
 
         # Append assistant response to conversation history
         self.session_service.add_to_history(sid, "assistant", response_text)
