@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from orchestrator.fetch_ontology_service import FetchOntologyService
 from query_execution import QueryExecutionService
 from query_evaluation import QueryEvaluationService
@@ -132,6 +132,8 @@ class OrchestratorService:
         # ── 3. Build sensitivity config and bounds from ontology ───────
         sensitivity_config = {}
         sensitivity_bounds = {}
+        sensitivity_number_buckets = {}
+        sensitivity_date_granularity = {}
 
         def _register_attr(attr):
             """Register an attribute and recursively its children."""
@@ -140,6 +142,12 @@ class OrchestratorService:
             if attr.min_value is not None and attr.max_value is not None:
                 if attr.name not in sensitivity_bounds:
                     sensitivity_bounds[attr.name] = (attr.min_value, attr.max_value)
+            if attr.number_buckets is not None:
+                if attr.name not in sensitivity_number_buckets:
+                    sensitivity_number_buckets[attr.name] = attr.number_buckets
+            if attr.date_granularity is not None:
+                if attr.name not in sensitivity_date_granularity:
+                    sensitivity_date_granularity[attr.name] = attr.date_granularity
             for child in attr.children:
                 _register_attr(child)
 
@@ -147,11 +155,14 @@ class OrchestratorService:
             for attr in obj.attributes:
                 _register_attr(attr)
 
-        # ── 4. Static evaluation (R1-R6) ──────────────────────────────
+        # ── 4. Static evaluation (R1-R9) ──────────────────────────────
         is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(
             sparql_query, sensitivity_config, sensitivity_bounds,
             max_semi_sensitive_group_by=self._config.max_semi_sensitive_group_by,
+            sensitivity_number_buckets=sensitivity_number_buckets,
+            sensitivity_date_granularity=sensitivity_date_granularity,
         )
+
         if not is_valid:
             logger.warning("Query rejected: %s", eval_message)
             return self._error_response(
@@ -202,6 +213,12 @@ class OrchestratorService:
         )
         logger.info("Applied Laplace noise and suppressed small groups.")
 
+        # ── 9.5. Humanize bucket labels ────────────────────────────────
+        noisy_result = self._humanize_bucket_labels(
+            noisy_result, sensitivity_bounds, sensitivity_number_buckets,
+            sensitivity_date_granularity,
+        )
+
         # ── 10. Build and return response ─────────────────────────────
         # Generate natural language response
         response_text = self.response_generator.generate_response(
@@ -226,3 +243,99 @@ class OrchestratorService:
             },
             "conversationHistory": list(session.conversation_history),
         }
+
+    # ── bucket label humanization ────────────────────────────────────────
+
+    @staticmethod
+    def _humanize_bucket_labels(
+        noisy_result: NoisyResult,
+        sensitivity_bounds: Dict[str, Tuple[float, float]],
+        sensitivity_number_buckets: Dict[str, int],
+        sensitivity_date_granularity: Dict[str, str],
+    ) -> NoisyResult:
+        """Replace raw bucket numbers with human-readable range labels.
+
+        Detects columns whose name contains ``bucket_`` or ``_bucket`` and
+        maps the raw FLOOR-division result back to a range string.
+
+        For numeric attributes:  ``9``  →  ``"144 – 160"``
+        For date decades:        ``198``  →  ``"1980 – 1990"``
+        """
+        if not noisy_result.rows:
+            return noisy_result
+
+        # Identify bucket columns from the first row's keys
+        sample_keys = list(noisy_result.rows[0].keys())
+        bucket_columns: List[Tuple[str, str]] = []  # (col_name, attr_name)
+
+        for col in sample_keys:
+            col_lower = col.lower()
+            # Extract attribute name from column like "bucket_gewicht" or "gewicht_bucket"
+            attr_name = None
+            if col_lower.startswith("bucket_"):
+                attr_name = col_lower[len("bucket_"):]
+            elif col_lower.endswith("_bucket"):
+                attr_name = col_lower[:-len("_bucket")]
+            elif "bucket" in col_lower:
+                # Try removing "bucket" and underscores
+                candidate = col_lower.replace("bucket", "").strip("_")
+                if candidate:
+                    attr_name = candidate
+
+            if attr_name:
+                bucket_columns.append((col, attr_name))
+
+        if not bucket_columns:
+            return noisy_result
+
+        # Build lookup for each bucket column
+        humanized_rows = [dict(row) for row in noisy_result.rows]
+
+        for col_name, attr_name in bucket_columns:
+            # Check numeric bucketing
+            num_buckets = (sensitivity_number_buckets.get(attr_name)
+                          or sensitivity_number_buckets.get(attr_name.lower()))
+            bounds = (sensitivity_bounds.get(attr_name)
+                      or sensitivity_bounds.get(attr_name.lower()))
+
+            if num_buckets and bounds:
+                lo, hi = bounds
+                bucket_size = (hi - lo) / num_buckets
+                for row in humanized_rows:
+                    val = row.get(col_name)
+                    if val is not None:
+                        try:
+                            bucket_num = int(float(val))
+                            range_lo = round(bucket_num * bucket_size, 1)
+                            range_hi = round((bucket_num + 1) * bucket_size, 1)
+                            # Use integers if bucket_size produces whole numbers
+                            if bucket_size == int(bucket_size):
+                                range_lo, range_hi = int(range_lo), int(range_hi)
+                            row[col_name] = f"{range_lo} – {range_hi}"
+                        except (ValueError, TypeError):
+                            pass
+                continue
+
+            # Check date bucketing (DECADE)
+            date_gran = (sensitivity_date_granularity.get(attr_name)
+                         or sensitivity_date_granularity.get(attr_name.lower()))
+            if date_gran == "DECADE":
+                for row in humanized_rows:
+                    val = row.get(col_name)
+                    if val is not None:
+                        try:
+                            decade_num = int(float(val))
+                            year_start = decade_num * 10
+                            row[col_name] = f"{year_start} – {year_start + 10}"
+                        except (ValueError, TypeError):
+                            pass
+            elif date_gran == "YEAR":
+                for row in humanized_rows:
+                    val = row.get(col_name)
+                    if val is not None:
+                        try:
+                            row[col_name] = str(int(float(val)))
+                        except (ValueError, TypeError):
+                            pass
+
+        return NoisyResult(rows=humanized_rows, aggregate_info=noisy_result.aggregate_info)

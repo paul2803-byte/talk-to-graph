@@ -118,6 +118,8 @@ class FetchOntologyService:
                     overlay_values
                 )
                 min_value, max_value = self._parse_bounds(overlay_values)
+                number_buckets = self._parse_number_buckets(overlay_values)
+                date_granularity = self._parse_date_granularity(overlay_values)
 
                 is_composite = self._is_composite_type(attr_type, base_names)
 
@@ -143,6 +145,8 @@ class FetchOntologyService:
                     children=children,
                     min_value=min_value,
                     max_value=max_value,
+                    number_buckets=number_buckets,
+                    date_granularity=date_granularity,
                 ))
 
             ontology.objects.append(obj)
@@ -173,6 +177,30 @@ class FetchOntologyService:
             except (ValueError, TypeError):
                 pass
         return None, None
+
+    @staticmethod
+    def _parse_number_buckets(overlay_values: list) -> Optional[int]:
+        """Extract optional number_buckets from overlay list index 4."""
+        if isinstance(overlay_values, list) and len(overlay_values) >= 5:
+            try:
+                return int(overlay_values[4])
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    @staticmethod
+    def _parse_date_granularity(overlay_values: list) -> Optional[str]:
+        """Extract optional date_granularity from overlay list index 4.
+
+        For date attributes the granularity string (e.g. 'YEAR', 'DECADE')
+        occupies position [4] (same slot as number_buckets for numeric
+        attributes — the two are mutually exclusive).
+        """
+        if isinstance(overlay_values, list) and len(overlay_values) >= 5:
+            val = overlay_values[4]
+            if isinstance(val, str) and val.upper() in ("YEAR", "DECADE", "MONTH"):
+                return val.upper()
+        return None
 
     @staticmethod
     def _is_composite_type(attr_type: str, base_names: Set[str]) -> bool:
@@ -241,6 +269,8 @@ class FetchOntologyService:
                 child_sens = parent_sensitivity
 
             child_min, child_max = self._parse_bounds(child_overlay_values)
+            child_num_buckets = self._parse_number_buckets(child_overlay_values)
+            child_date_gran = self._parse_date_granularity(child_overlay_values)
 
             child_is_composite = self._is_composite_type(child_type, base_names)
             grandchildren: List[Attribute] = []
@@ -266,6 +296,8 @@ class FetchOntologyService:
                 generalization_order=gen_order.get(child_name),
                 min_value=child_min,
                 max_value=child_max,
+                number_buckets=child_num_buckets,
+                date_granularity=child_date_gran,
             ))
 
         return children

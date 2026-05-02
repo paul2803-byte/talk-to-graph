@@ -48,14 +48,14 @@ SENSITIVITY_BOUNDS: Dict[str, Tuple[float, float]] = {
     "gehalt":          (0.0, 200000.0),
     "latitude":        (-90.0, 90.0),
     "longitude":       (-180.0, 180.0),
-    "gewicht":         (30.0, 300.0),
-    "koerpergroesse":  (50.0, 250.0),
+    "gewicht":         (40.0, 150.0),
+    "koerpergroesse":  (140.0, 220.0),
 }
 
 SENSITIVITY_NUMBER_BUCKETS: Dict[str, int] = {
     "gehalt": 20,
-    "gewicht": 10,
-    "koerpergroesse": 10,
+    "gewicht": 5,
+    "koerpergroesse": 5,
 }
 
 SENSITIVITY_DATE_GRANULARITY: Dict[str, str] = {
@@ -353,7 +353,7 @@ ADDITIONAL_SCENARIOS = [
             WHERE {{
                 ?s a oyd:AnonymisationDemo ;
                    oyd:gehalt ?gehalt .
-                BIND(FLOOR(?gehalt / 10000) AS ?bucket_gehalt)
+                BIND(FLOOR(?gehalt / 10000.0) AS ?bucket_gehalt)
             }}
             GROUP BY ?bucket_gehalt
         """,
@@ -515,6 +515,26 @@ ADDITIONAL_SCENARIOS = [
         """,
         expected_allowed=False,
         note="Raw grouping of metric variable that requires bucketing. Blocked by Rule R9.",
+    ),
+    ValidationScenario(
+        id="R11",
+        natural_language="What is the average koerpergroesse per gewicht?",
+        sparql=f"""
+            PREFIX oyd: <{NAMESPACE}>
+            SELECT (AVG(?koerpergroesse) AS ?avg_koerpergroesse) (COUNT(?s) AS ?count) ?gewicht
+            WHERE {{
+                ?s a oyd:AnonymisationDemo ;
+                   oyd:koerpergroesse ?koerpergroesse ;
+                   oyd:gewicht ?gewicht .
+            }}
+            GROUP BY ?gewicht
+            ORDER BY ?gewicht
+        """,
+        expected_allowed=False,
+        note=(
+            "Raw GROUP BY on semi-sensitive metric attribute 'gewicht' without bucketing. "
+            "Must use BIND(FLOOR(?gewicht / bucket_size) AS ?bucket_gewicht). Blocked by R9."
+        ),
     ),
 
     # ── Composite sensitivity inheritance scenarios ──

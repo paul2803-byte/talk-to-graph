@@ -99,6 +99,10 @@ class QueryEvaluationService:
         # Step 4: Collect GROUP BY variables
         group_by_vars = self._collect_group_by_variables(root)
 
+        # Step 4a: Collect variables used *inside* GROUP BY expressions
+        # (e.g. ?geburtsdatum inside GROUP BY (FLOOR(YEAR(?geburtsdatum)/10)))
+        group_by_expr_vars = self._collect_group_by_expression_variables(root)
+
         # Step 4.5: Collect bucketing aliases for DP numeric/date grouping
         bucketing_aliases, date_bucketing_aliases = self._collect_bucketing_aliases(root)
         
@@ -246,14 +250,23 @@ class QueryEvaluationService:
         # Note: rdflib uses Aggregate_Sample internally as a pass-through
         # for GROUP BY variables projected in SELECT.  We must NOT block
         # that synthetic usage — only explicit user-requested SAMPLE.
+        # Two cases where Aggregate_Sample is synthetic:
+        #   1. BIND form:  GROUP BY ?decade → Aggregate_Sample(vars=?decade)
+        #      Here ?decade ∈ group_by_var_names.
+        #   2. Inline form: GROUP BY (FLOOR(YEAR(?x)/10)) → Aggregate_Sample(vars=?x)
+        #      Here ?x ∉ group_by_var_names, but ?x ∈ group_by_expr_var_names.
         group_by_var_names = {str(v) for v in group_by_vars}
+        group_by_expr_var_names = {str(v) for v in group_by_expr_vars}
         for detail in aggregate_details:
             inner_attr = detail.get("inner_attribute")
             agg_func = detail["agg_function"]
             if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
                 if agg_func in self._BLOCKED_AGGREGATES:
                     # Skip synthetic Aggregate_Sample for GROUP BY keys
-                    if agg_func == "Aggregate_Sample" and inner_attr in group_by_var_names:
+                    if agg_func == "Aggregate_Sample" and (
+                        inner_attr in group_by_var_names
+                        or inner_attr in group_by_expr_var_names
+                    ):
                         continue
                     return False, (
                         f"Query rejected: {agg_func} on semi-sensitive attribute "
@@ -625,6 +638,62 @@ class QueryEvaluationService:
                     for item in child:
                         if isinstance(item, CompValue):
                             self._walk_group_by(item, group_vars)
+
+    def _collect_group_by_expression_variables(self, node) -> Set[Variable]:
+        """Collect variables used *inside* GROUP BY expressions.
+
+        When GROUP BY uses an inline expression like
+        ``GROUP BY (FLOOR(YEAR(?geburtsdatum) / 10))``, rdflib translates this
+        into a Group node with ``expr=[None]`` and an Extend child whose
+        ``var=None``.  The actual grouping expression (containing the source
+        variable) lives inside that Extend's ``expr``.
+
+        This method extracts those inner variables so that Rule R5 can
+        recognise the synthetic ``Aggregate_Sample`` on them.
+        """
+        expr_vars: Set[Variable] = set()
+        self._walk_group_by_expressions(node, expr_vars)
+        return expr_vars
+
+    def _walk_group_by_expressions(self, node, expr_vars: Set[Variable]):
+        """Walk the tree to find Group nodes with expression-based grouping."""
+        if not isinstance(node, CompValue):
+            return
+
+        if node.name == "Group":
+            expr_list = node.get("expr") or []
+            has_none_expr = any(item is None for item in expr_list)
+            if has_none_expr:
+                # Look inside the Group's child for Extend with var=None
+                inner = node.get("p")
+                self._extract_group_extend_vars(inner, expr_vars)
+
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._walk_group_by_expressions(child, expr_vars)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._walk_group_by_expressions(item, expr_vars)
+
+    def _extract_group_extend_vars(self, node, expr_vars: Set[Variable]):
+        """Extract variables from Extend nodes with var=None inside a Group.
+
+        These represent inline GROUP BY expressions lowered by rdflib.
+        """
+        if not isinstance(node, CompValue):
+            return
+        if node.name == "Extend":
+            alias = node.get("var")
+            expr = node.get("expr")
+            if alias is None and expr is not None:
+                # This is an inline GROUP BY expression — extract all
+                # source variables from the expression tree.
+                self._extract_variables_from_expr(expr, expr_vars)
+            # Continue into nested Extends
+            inner = node.get("p")
+            self._extract_group_extend_vars(inner, expr_vars)
 
     # ──────────────────────────────────────────────────────────────────────
     # Aggregate detail extraction (for Rules R5/R6 + downstream metadata)

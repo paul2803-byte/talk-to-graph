@@ -30,14 +30,22 @@ Strictly adhere to the provided ontology (usually in JSON-LD):
 - Filters: Use FILTER for constraints.
 - Aggregation: When using AVG(...), always include a COUNT of the same grouping (e.g. COUNT(?x) AS ?count) in the SELECT clause. This is required for differential privacy noise calibration.
 - DP Grouping (Bucketing): When grouping by a metric semi-sensitive attribute, you MUST apply bucketing unless the user explicitly requests a custom size. 
-    1. Numeric attributes: calculate the exact bucket size as `(max_value - min_value) / number_buckets` based on the provided ontology constraints. Use standard syntax: `BIND(FLOOR(?attribute / bucket_size) AS ?bucket_attribute)` and group by that alias.
-    2. Date attributes: use native SPARQL time grouping based on the provided `date_granularity`. E.g., for YEAR use `BIND(YEAR(?date) AS ?bucket_date)`. For DECADE use `BIND(FLOOR(YEAR(?date) / 10) AS ?bucket_date)`.
+    **IMPORTANT**: Always use the BIND form to create a named alias in the WHERE clause, then GROUP BY and ORDER BY that alias. Do NOT put the bucketing expression inline in SELECT or GROUP BY.
+    1. Numeric attributes: calculate the exact bucket size as `(max_value - min_value) / number_buckets` based on the provided ontology constraints. Use standard syntax: `BIND(FLOOR(?attribute / bucket_size) AS ?bucket_attribute)` and GROUP BY ?bucket_attribute.
+    2. Date attributes: use native SPARQL time grouping based on the provided `date_granularity`. E.g., for YEAR use `BIND(YEAR(?date) AS ?bucket_date)`. For DECADE use `BIND(FLOOR(YEAR(?date) / 10) AS ?bucket_date)`. Then GROUP BY ?bucket_date.
+    3. NEVER use inline expressions like `GROUP BY (FLOOR(YEAR(?date) / 10))`. Always use BIND.
 
-4. Example
-If Ontology base is <https://example.org/> and includes Object1 with property gehalt:
-Query:
+4. Examples
+Example 1 - Simple aggregate:
 PREFIX oyd: <https://example.org/>
 SELECT (AVG(?gehalt) AS ?avg) (COUNT(?s) AS ?count) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt . }
+
+Example 2 - Decade bucketing (correct BIND form):
+PREFIX oyd: <https://example.org/>
+SELECT (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?count) ?decade
+WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt ; oyd:geburtsdatum ?geburtsdatum . BIND(FLOOR(YEAR(?geburtsdatum) / 10) AS ?decade) }
+GROUP BY ?decade
+ORDER BY ?decade
 """.strip()
 
 
