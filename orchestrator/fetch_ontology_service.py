@@ -114,12 +114,7 @@ class FetchOntologyService:
 
             for attr_name, attr_type in attrs_def.items():
                 overlay_values = overlay_attrs.get(attr_name, [])
-                anonymization_type, sensitivity_level = self._parse_overlay_values(
-                    overlay_values
-                )
-                min_value, max_value = self._parse_bounds(overlay_values)
-                number_buckets = self._parse_number_buckets(overlay_values)
-                date_granularity = self._parse_date_granularity(overlay_values)
+                anonymization_type, sensitivity_level, min_value, max_value, number_buckets, date_granularity = self._extract_attribute_config(overlay_values)
 
                 is_composite = self._is_composite_type(attr_type, base_names)
 
@@ -154,6 +149,74 @@ class FetchOntologyService:
         return ontology
 
     # ── helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_named_format(overlay_values) -> bool:
+        """Return True if the overlay value is a dict (named format)."""
+        return isinstance(overlay_values, dict)
+
+    @staticmethod
+    def _parse_named_overlay(overlay_values: dict) -> Tuple[str, str]:
+        anon = overlay_values.get("anonymization_type", "")
+        sens = overlay_values.get("sensitivity_level", "sensitive")
+        return anon, sens
+
+    @staticmethod
+    def _parse_named_bounds(overlay_values: dict) -> Tuple[Optional[float], Optional[float]]:
+        min_val = overlay_values.get("min_value")
+        max_val = overlay_values.get("max_value")
+        try:
+            min_f = float(min_val) if min_val is not None else None
+            max_f = float(max_val) if max_val is not None else None
+            if min_f is not None and max_f is not None:
+                return min_f, max_f
+        except (ValueError, TypeError):
+            pass
+        return None, None
+
+    @staticmethod
+    def _parse_named_number_buckets(overlay_values: dict) -> Optional[int]:
+        nb = overlay_values.get("number_buckets")
+        if nb is not None:
+            try:
+                return int(nb)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    @staticmethod
+    def _parse_named_date_granularity(overlay_values: dict) -> Optional[str]:
+        dg = overlay_values.get("date_granularity")
+        if isinstance(dg, str) and dg.upper() in ("YEAR", "DECADE", "MONTH"):
+            return dg.upper()
+        return None
+
+    @staticmethod
+    def _extract_named_generalization_order(overlay_values: dict) -> Dict[str, int]:
+        order_list = overlay_values.get("attribute_order", [])
+        if isinstance(order_list, list):
+            return {name: idx for idx, name in enumerate(order_list)}
+        return {}
+
+    def _extract_attribute_config(self, overlay_values) -> Tuple[str, str, Optional[float], Optional[float], Optional[int], Optional[str]]:
+        """Unified extraction, auto-detecting positional vs. named format."""
+        if self._is_named_format(overlay_values):
+            anon, sens = self._parse_named_overlay(overlay_values)
+            min_val, max_val = self._parse_named_bounds(overlay_values)
+            num_buckets = self._parse_named_number_buckets(overlay_values)
+            date_gran = self._parse_named_date_granularity(overlay_values)
+        else:
+            anon, sens = self._parse_overlay_values(overlay_values)
+            min_val, max_val = self._parse_bounds(overlay_values)
+            num_buckets = self._parse_number_buckets(overlay_values)
+            date_gran = self._parse_date_granularity(overlay_values)
+        return anon, sens, min_val, max_val, num_buckets, date_gran
+
+    def _extract_generalization_order_unified(self, overlay_values) -> Dict[str, int]:
+        """Unified extraction, auto-detecting positional vs. named format."""
+        if self._is_named_format(overlay_values):
+            return self._extract_named_generalization_order(overlay_values)
+        return self._extract_generalization_order(overlay_values)
 
     @staticmethod
     def _parse_overlay_values(overlay_values: list) -> Tuple[str, str]:
@@ -253,7 +316,7 @@ class FetchOntologyService:
         if not child_attrs_def:
             return []
 
-        gen_order = self._extract_generalization_order(overlay_values)
+        gen_order = self._extract_generalization_order_unified(overlay_values)
         # Also check if the referenced base itself has an overlay
         child_overlay = overlay_defs.get(ref_base_name, {})
 
@@ -262,15 +325,12 @@ class FetchOntologyService:
             # Check if child has its own explicit overlay on the referenced base
             child_overlay_values = child_overlay.get(child_name, [])
             if child_overlay_values:
-                child_anon, child_sens = self._parse_overlay_values(child_overlay_values)
+                child_anon, child_sens, child_min, child_max, child_num_buckets, child_date_gran = self._extract_attribute_config(child_overlay_values)
             else:
                 # Inherit from parent
                 child_anon = parent_anonymization
                 child_sens = parent_sensitivity
-
-            child_min, child_max = self._parse_bounds(child_overlay_values)
-            child_num_buckets = self._parse_number_buckets(child_overlay_values)
-            child_date_gran = self._parse_date_granularity(child_overlay_values)
+                child_min, child_max, child_num_buckets, child_date_gran = None, None, None, None
 
             child_is_composite = self._is_composite_type(child_type, base_names)
             grandchildren: List[Attribute] = []

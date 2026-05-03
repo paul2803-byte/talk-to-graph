@@ -1,10 +1,13 @@
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Set
 
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.algebra import CompValue
 from rdflib.term import Variable, URIRef, Literal
+
+if TYPE_CHECKING:
+    from models.attribute_config import AttributeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +42,8 @@ class QueryEvaluationService:
     def evaluate_query(
         self,
         query: str,
-        sensitivity_config: Dict[str, str],
-        sensitivity_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
+        attribute_configs: Dict[str, 'AttributeConfig'],
         max_semi_sensitive_group_by: int = 1,
-        sensitivity_number_buckets: Optional[Dict[str, int]] = None,
-        sensitivity_date_granularity: Optional[Dict[str, str]] = None,
     ) -> Tuple[bool, str, List[Dict[str, Any]]]:
         """
         Evaluates a SPARQL query and returns whether it is valid along with
@@ -51,29 +51,15 @@ class QueryEvaluationService:
 
         Args:
             query: The SPARQL query string to evaluate.
-            sensitivity_config: ``{attribute_name: sensitivity_level}``.
-                Each value must be one of "sensitive", "semi-sensitive",
-                or "not-sensitive".
-            sensitivity_bounds: ``{attribute_name: (min_value, max_value)}``.
-                Required by Rule R6 for SUM/AVG on semi-sensitive attributes.
+            attribute_configs: ``{attribute_name: AttributeConfig}``.
+            max_semi_sensitive_group_by: Max grouping keys.
 
         Returns:
             Tuple of (is_valid, message, aggregate_info).
-            aggregate_info is a list of dicts with keys:
-                - "variable": projected variable name
-                - "function": one of "count", "sum", "avg"
-                - "attribute": ontology attribute name (or None for COUNT(*))
         """
-        if sensitivity_bounds is None:
-            sensitivity_bounds = {}
-        if sensitivity_number_buckets is None:
-            sensitivity_number_buckets = {}
-        if sensitivity_date_granularity is None:
-            sensitivity_date_granularity = {}
-
         # Classify attributes by sensitivity
         sensitive_attrs, semi_sensitive_attrs, not_sensitive_attrs = self._classify_attributes(
-            sensitivity_config
+            attribute_configs
         )
 
         # Parse and translate SPARQL to algebra tree
@@ -191,13 +177,15 @@ class QueryEvaluationService:
                 onto_attr = var_to_attr.get(var_name, var_name)
                 onto_attr_lower = onto_attr.lower()
                 
+                cfg = attribute_configs.get(onto_attr) or attribute_configs.get(onto_attr_lower)
+                
                 # Check Numeric Track
-                num_buckets = sensitivity_number_buckets.get(onto_attr) or sensitivity_number_buckets.get(onto_attr_lower)
+                num_buckets = cfg.number_buckets if cfg else None
                 # Check Date Track 
-                date_gran = sensitivity_date_granularity.get(onto_attr) or sensitivity_date_granularity.get(onto_attr_lower)
+                date_gran = cfg.date_granularity if cfg else None
                 
                 # If it has bounds but no buckets defined, it's considered numeric missing its bucket config
-                bounds = sensitivity_bounds.get(onto_attr) or sensitivity_bounds.get(onto_attr_lower)
+                bounds = cfg.bounds if cfg else None
                 is_numeric_attr = bounds is not None and bounds[0] is not None
                 
                 needs_bucketing = num_buckets is not None or date_gran is not None or is_numeric_attr
@@ -282,7 +270,8 @@ class QueryEvaluationService:
                     # Resolve SPARQL variable to ontology attribute name
                     onto_attr = var_to_attr.get(inner_attr, inner_attr)
                     onto_attr_lower = onto_attr.lower()
-                    bounds = sensitivity_bounds.get(onto_attr) or sensitivity_bounds.get(onto_attr_lower)
+                    cfg = attribute_configs.get(onto_attr) or attribute_configs.get(onto_attr_lower)
+                    bounds = cfg.bounds if cfg else None
                     if bounds is None or bounds[0] is None or bounds[1] is None:
                         return False, (
                             f"Query rejected: {agg_func} on semi-sensitive attribute "
@@ -333,14 +322,15 @@ class QueryEvaluationService:
 
     @staticmethod
     def _classify_attributes(
-        config: Dict[str, str]
+        config: Dict[str, 'AttributeConfig']
     ) -> Tuple[Set[str], Set[str], Set[str]]:
         """Partition attribute names into sensitive / semi-sensitive / not-sensitive sets (lower-cased)."""
         sensitive: Set[str] = set()
         semi_sensitive: Set[str] = set()
         not_sensitive: Set[str] = set()
-        for attr, level in config.items():
+        for attr, cfg in config.items():
             name = attr.lower()
+            level = cfg.sensitivity_level
             if level == "sensitive":
                 sensitive.add(name)
             elif level == "semi-sensitive":

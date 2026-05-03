@@ -1,5 +1,6 @@
 """Tests for Rules R7, R2 enhancement (R2b), and R8 in QueryEvaluationService."""
 import pytest
+from models.attribute_config import AttributeConfig
 from query_evaluation.query_evaluation_service import QueryEvaluationService
 
 
@@ -8,16 +9,11 @@ def service():
     return QueryEvaluationService()
 
 
-SENSITIVITY = {
-    "gehalt": "semi-sensitive",
-    "name": "sensitive",
-    "alter": "semi-sensitive",
-    "ort": "not-sensitive",
-}
-
-BOUNDS = {
-    "gehalt": (1000.0, 10000.0),
-    "alter": (18.0, 100.0),
+ATTRIBUTE_CONFIGS = {
+    "gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0)),
+    "name": AttributeConfig("sensitive"),
+    "alter": AttributeConfig("semi-sensitive", bounds=(18.0, 100.0)),
+    "ort": AttributeConfig("not-sensitive"),
 }
 
 
@@ -30,7 +26,7 @@ class TestRuleR7:
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
             SELECT ?salary WHERE { oyd:object1-test117 oyd:gehalt ?salary . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R7" in msg
 
@@ -41,7 +37,7 @@ class TestRuleR7:
             SELECT (AVG(?salary) AS ?avg) (COUNT(?salary) AS ?cnt)
             WHERE { oyd:person1 oyd:gehalt ?salary . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R7" in msg
 
@@ -51,7 +47,7 @@ class TestRuleR7:
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
             SELECT ?city WHERE { oyd:person1 oyd:ort ?city . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
     def test_variable_subject_allowed(self, service):
@@ -61,7 +57,7 @@ class TestRuleR7:
             SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
     def test_concrete_subject_sensitive_rejected(self, service):
@@ -70,7 +66,7 @@ class TestRuleR7:
             PREFIX oyd: <https://soya.ownyourdata.eu/Demo/>
             SELECT ?n WHERE { oyd:person1 oyd:name ?n . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R7" in msg
 
@@ -88,7 +84,7 @@ class TestRuleR2b:
                 ?s oyd:alter 30 .
             }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R2" in msg
 
@@ -102,7 +98,7 @@ class TestRuleR2b:
                 ?s oyd:ort "Wien" .
             }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
 
@@ -116,7 +112,7 @@ class TestRuleR8:
             SELECT (AVG(?gehalt) AS ?avgSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R8" in msg
 
@@ -127,7 +123,7 @@ class TestRuleR8:
             SELECT (SUM(?gehalt) AS ?totalSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R8" in msg
 
@@ -138,7 +134,7 @@ class TestRuleR8:
             SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
     def test_count_only_allowed(self, service):
@@ -148,5 +144,5 @@ class TestRuleR8:
             SELECT (COUNT(?gehalt) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
