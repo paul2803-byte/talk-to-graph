@@ -76,6 +76,7 @@ class OrchestratorService:
         ontology_url: str,
         session_id: Optional[str] = None,
         epsilon: Optional[float] = None,
+        adjusted_query: Optional[str] = None,
     ) -> dict:
         """
         Orchestration method to coordinate calls between different services.
@@ -104,31 +105,35 @@ class OrchestratorService:
             )
 
         # ── 2. Generate SPARQL query ───────────────────────────────────
-        try:
-            sparql_query = generate_sparql_query(ontology_obj, question)
-            # test queries for saving tokens during development
-            sparql_query_test = """
-                PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
-                SELECT (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?count)
-                WHERE {
-                    ?s a oyd:Object1 ;
-                    oyd:gehalt ?gehalt .
-                }
-            """
-            sparql_query_test2 = """
-                PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
-                SELECT ?salary WHERE { 
-                    ?s a oyd:Object1 ;
-                    oyd:gehalt ?salary .
-                }
-            """
-            logger.debug("Generated SPARQL Query:\n%s", sparql_query)
-            logger.info("Generated SPARQL query successfully.")
-        except Exception as e:
-            logger.error("SPARQL generation failed: %s", e)
-            return self._error_response(
-                "QUERY_GENERATION_FAILED", sid, session.conversation_history
-            )
+        if adjusted_query:
+            sparql_query = adjusted_query
+            logger.info("Using provided adjusted SPARQL query.")
+        else:
+            try:
+                sparql_query = generate_sparql_query(ontology_obj, question)
+                # test queries for saving tokens during development
+                sparql_query_test = """
+                    PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
+                    SELECT (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?count)
+                    WHERE {
+                        ?s a oyd:Object1 ;
+                        oyd:gehalt ?gehalt .
+                    }
+                """
+                sparql_query_test2 = """
+                    PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
+                    SELECT ?salary WHERE { 
+                        ?s a oyd:Object1 ;
+                        oyd:gehalt ?salary .
+                    }
+                """
+                logger.debug("Generated SPARQL Query:\n%s", sparql_query)
+                logger.info("Generated SPARQL query successfully.")
+            except Exception as e:
+                logger.error("SPARQL generation failed: %s", e)
+                return self._error_response(
+                    "QUERY_GENERATION_FAILED", sid, session.conversation_history
+                )
 
         # ── 3. Build sensitivity config and bounds from ontology ───────
         attribute_configs: Dict[str, AttributeConfig] = {}

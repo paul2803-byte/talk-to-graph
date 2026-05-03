@@ -35,7 +35,8 @@ def talk_to_data():
         "question": "string",
         "data": {},
         "ontology_url": "url",
-        "sessionId": "optional string"
+        "sessionId": "optional string",
+        "adjusted_query": "optional string"
     }
     """
     request_data = request.get_json()
@@ -48,6 +49,7 @@ def talk_to_data():
     ontology_url = request_data.get("ontology_url")
     session_id = request_data.get("sessionId")
     epsilon = request_data.get("epsilon")
+    adjusted_query = request_data.get("adjusted_query")
 
     if not question:
         return jsonify({"error": "Question is required", "status": "error"}), 400
@@ -65,7 +67,7 @@ def talk_to_data():
 
     try:
         result = orchestrator_service.talk_to_data(
-            question, data_payload, ontology_url, session_id=session_id, epsilon=epsilon
+            question, data_payload, ontology_url, session_id=session_id, epsilon=epsilon, adjusted_query=adjusted_query
         )
         return jsonify(result)
     except Exception as e:
