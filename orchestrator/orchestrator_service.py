@@ -6,6 +6,7 @@ from query_evaluation import QueryEvaluationService
 from query_generation import generate_sparql_query
 from query_generation.response_generator import ResponseGenerator
 from privacy import NoiseService, PrivacyBudgetService
+from models.attribute_config import AttributeConfig
 from models.privacy_config import PrivacyConfig
 from models.noisy_result import NoisyResult
 from session import SessionService
@@ -130,24 +131,20 @@ class OrchestratorService:
             )
 
         # ── 3. Build sensitivity config and bounds from ontology ───────
-        sensitivity_config = {}
-        sensitivity_bounds = {}
-        sensitivity_number_buckets = {}
-        sensitivity_date_granularity = {}
+        attribute_configs: Dict[str, AttributeConfig] = {}
 
         def _register_attr(attr):
             """Register an attribute and recursively its children."""
-            if attr.name not in sensitivity_config:
-                sensitivity_config[attr.name] = attr.sensitivity_level
-            if attr.min_value is not None and attr.max_value is not None:
-                if attr.name not in sensitivity_bounds:
-                    sensitivity_bounds[attr.name] = (attr.min_value, attr.max_value)
-            if attr.number_buckets is not None:
-                if attr.name not in sensitivity_number_buckets:
-                    sensitivity_number_buckets[attr.name] = attr.number_buckets
-            if attr.date_granularity is not None:
-                if attr.name not in sensitivity_date_granularity:
-                    sensitivity_date_granularity[attr.name] = attr.date_granularity
+            if attr.name not in attribute_configs:
+                bounds = None
+                if attr.min_value is not None and attr.max_value is not None:
+                    bounds = (attr.min_value, attr.max_value)
+                attribute_configs[attr.name] = AttributeConfig(
+                    sensitivity_level=attr.sensitivity_level,
+                    bounds=bounds,
+                    number_buckets=attr.number_buckets,
+                    date_granularity=attr.date_granularity,
+                )
             for child in attr.children:
                 _register_attr(child)
 
@@ -157,10 +154,8 @@ class OrchestratorService:
 
         # ── 4. Static evaluation (R1-R9) ──────────────────────────────
         is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(
-            sparql_query, sensitivity_config, sensitivity_bounds,
+            sparql_query, attribute_configs,
             max_semi_sensitive_group_by=self._config.max_semi_sensitive_group_by,
-            sensitivity_number_buckets=sensitivity_number_buckets,
-            sensitivity_date_granularity=sensitivity_date_granularity,
         )
 
         if not is_valid:
@@ -203,7 +198,7 @@ class OrchestratorService:
         noisy_result = self.noise_service.add_noise(
             query_results,
             aggregate_info,
-            sensitivity_bounds,
+            attribute_configs,
             epsilon_per_column,
         )
 
@@ -215,8 +210,7 @@ class OrchestratorService:
 
         # ── 9.5. Humanize bucket labels ────────────────────────────────
         noisy_result = self._humanize_bucket_labels(
-            noisy_result, sensitivity_bounds, sensitivity_number_buckets,
-            sensitivity_date_granularity,
+            noisy_result, attribute_configs
         )
 
         # ── 10. Build and return response ─────────────────────────────
@@ -249,9 +243,7 @@ class OrchestratorService:
     @staticmethod
     def _humanize_bucket_labels(
         noisy_result: NoisyResult,
-        sensitivity_bounds: Dict[str, Tuple[float, float]],
-        sensitivity_number_buckets: Dict[str, int],
-        sensitivity_date_granularity: Dict[str, str],
+        attribute_configs: Dict[str, AttributeConfig],
     ) -> NoisyResult:
         """Replace raw bucket numbers with human-readable range labels.
 
@@ -292,11 +284,11 @@ class OrchestratorService:
         humanized_rows = [dict(row) for row in noisy_result.rows]
 
         for col_name, attr_name in bucket_columns:
+            cfg = attribute_configs.get(attr_name) or attribute_configs.get(attr_name.lower())
+            
             # Check numeric bucketing
-            num_buckets = (sensitivity_number_buckets.get(attr_name)
-                          or sensitivity_number_buckets.get(attr_name.lower()))
-            bounds = (sensitivity_bounds.get(attr_name)
-                      or sensitivity_bounds.get(attr_name.lower()))
+            num_buckets = cfg.number_buckets if cfg else None
+            bounds = cfg.bounds if cfg else None
 
             if num_buckets and bounds:
                 lo, hi = bounds
@@ -317,8 +309,7 @@ class OrchestratorService:
                 continue
 
             # Check date bucketing (DECADE)
-            date_gran = (sensitivity_date_granularity.get(attr_name)
-                         or sensitivity_date_granularity.get(attr_name.lower()))
+            date_gran = cfg.date_granularity if cfg else None
             if date_gran == "DECADE":
                 for row in humanized_rows:
                     val = row.get(col_name)

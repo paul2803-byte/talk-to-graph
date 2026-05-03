@@ -28,7 +28,7 @@ class NoiseService:
         self,
         query_results: List[Dict[str, Any]],
         aggregate_info: List[Dict[str, str]],
-        attribute_bounds: Dict[str, Tuple[float, float]],
+        attribute_configs: Dict[str, 'AttributeConfig'],
         epsilon_base: float,
     ) -> NoisyResult:
         """Add Laplace noise to every aggregate column in *query_results*.
@@ -41,8 +41,8 @@ class NoiseService:
         aggregate_info:
             One entry per aggregate column describing the function and
             attribute (see module docstring).
-        attribute_bounds:
-            ``{attr_name: (min_val, max_val)}`` from the ontology overlay.
+        attribute_configs:
+            ``{attr_name: AttributeConfig}`` containing bounds from the ontology overlay.
         epsilon_base:
             The per-column privacy budget slice.
 
@@ -72,13 +72,14 @@ class NoiseService:
             func = agg["function"].lower()
             attr = agg.get("attribute")
 
+            cfg = attribute_configs.get(attr) if attr else None
+            bounds = cfg.bounds if cfg else None
+
             if func == "count":
                 self._add_count_noise(noisy_results, var, epsilon_base)
             elif func == "sum":
-                bounds = attribute_bounds.get(attr) if attr else None
                 self._add_sum_noise(noisy_results, var, bounds, epsilon_base)
             elif func == "avg":
-                bounds = attribute_bounds.get(attr) if attr else None
                 self._add_avg_noise_clipped_mean(
                     noisy_results, var, bounds, epsilon_base, true_counts
                 )

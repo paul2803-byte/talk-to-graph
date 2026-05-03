@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
+from models.attribute_config import AttributeConfig
 from query_evaluation.query_evaluation_service import QueryEvaluationService
 
 
@@ -23,43 +24,21 @@ from query_evaluation.query_evaluation_service import QueryEvaluationService
 
 NAMESPACE = "https://soya.ownyourdata.eu/AnonymisationDemo/"
 
-SENSITIVITY_CONFIG: Dict[str, str] = {
-    # AnonymisationDemo base
-    "name":                 "sensitive",       # masking + sensitive
-    "adresse":              "semi-sensitive",   # generalization + semi-sensitive
-    "geburtsdatum":         "semi-sensitive",   # randomization + semi-sensitive
-    "gehalt":               "semi-sensitive",   # generalization + semi-sensitive
-    "latitude":             "semi-sensitive",   # generalization + semi-sensitive
-    "longitude":            "semi-sensitive",   # randomization + semi-sensitive
-    "gewicht":              "semi-sensitive",   # generalization + semi-sensitive
-    "koerpergroesse":       "semi-sensitive",   # generalization + semi-sensitive
-    "start_pv":             "semi-sensitive",   # generalization + semi-sensitive
-    # Range / DateRange sub-attributes are not directly queried in typical scenarios
-    # Address sub-attributes – inherit semi-sensitive from parent 'adresse'
-    "detail":               "semi-sensitive",
-    "city":                 "semi-sensitive",
-    "zip":                  "semi-sensitive",
-    "state":                "semi-sensitive",
-    "country":              "semi-sensitive",
-}
-
-# Manually set min/max bounds for numeric semi-sensitive attributes
-SENSITIVITY_BOUNDS: Dict[str, Tuple[float, float]] = {
-    "gehalt":          (0.0, 200000.0),
-    "latitude":        (-90.0, 90.0),
-    "longitude":       (-180.0, 180.0),
-    "gewicht":         (40.0, 150.0),
-    "koerpergroesse":  (140.0, 220.0),
-}
-
-SENSITIVITY_NUMBER_BUCKETS: Dict[str, int] = {
-    "gehalt": 20,
-    "gewicht": 5,
-    "koerpergroesse": 5,
-}
-
-SENSITIVITY_DATE_GRANULARITY: Dict[str, str] = {
-    "geburtsdatum": "DECADE",
+ATTRIBUTE_CONFIGS: Dict[str, AttributeConfig] = {
+    "name": AttributeConfig("sensitive"),
+    "adresse": AttributeConfig("semi-sensitive"),
+    "geburtsdatum": AttributeConfig("semi-sensitive", date_granularity="DECADE"),
+    "gehalt": AttributeConfig("semi-sensitive", bounds=(0.0, 200000.0), number_buckets=20),
+    "latitude": AttributeConfig("semi-sensitive", bounds=(-90.0, 90.0)),
+    "longitude": AttributeConfig("semi-sensitive", bounds=(-180.0, 180.0)),
+    "gewicht": AttributeConfig("semi-sensitive", bounds=(40.0, 150.0), number_buckets=5),
+    "koerpergroesse": AttributeConfig("semi-sensitive", bounds=(140.0, 220.0), number_buckets=5),
+    "start_pv": AttributeConfig("semi-sensitive"),
+    "detail": AttributeConfig("semi-sensitive"),
+    "city": AttributeConfig("semi-sensitive"),
+    "zip": AttributeConfig("semi-sensitive"),
+    "state": AttributeConfig("semi-sensitive"),
+    "country": AttributeConfig("semi-sensitive"),
 }
 
 
@@ -77,10 +56,7 @@ class ValidationScenario:
 
 def run_validation(
     scenarios: List[ValidationScenario],
-    sensitivity_config: Dict[str, str] = SENSITIVITY_CONFIG,
-    sensitivity_bounds: Dict[str, Tuple[float, float]] = SENSITIVITY_BOUNDS,
-    sensitivity_number_buckets: Dict[str, int] = SENSITIVITY_NUMBER_BUCKETS,
-    sensitivity_date_granularity: Dict[str, str] = SENSITIVITY_DATE_GRANULARITY,
+    attribute_configs: Dict[str, AttributeConfig] = ATTRIBUTE_CONFIGS,
 ) -> List[dict]:
     """Run each scenario through QueryEvaluationService and return results."""
     service = QueryEvaluationService()
@@ -88,11 +64,8 @@ def run_validation(
     for sc in scenarios:
         is_valid, message, agg_info = service.evaluate_query(
             sc.sparql,
-            sensitivity_config,
-            sensitivity_bounds,
+            attribute_configs,
             max_semi_sensitive_group_by=1,
-            sensitivity_number_buckets=sensitivity_number_buckets,
-            sensitivity_date_granularity=sensitivity_date_granularity,
         )
         results.append({
             "id": sc.id,
@@ -601,11 +574,8 @@ def test_validation_scenario(service, scenario: ValidationScenario):
     """Assert that each scenario matches its expected validation outcome."""
     is_valid, message, _ = service.evaluate_query(
         scenario.sparql,
-        SENSITIVITY_CONFIG,
-        SENSITIVITY_BOUNDS,
+        ATTRIBUTE_CONFIGS,
         max_semi_sensitive_group_by=1,
-        sensitivity_number_buckets=SENSITIVITY_NUMBER_BUCKETS,
-        sensitivity_date_granularity=SENSITIVITY_DATE_GRANULARITY,
     )
     assert is_valid == scenario.expected_allowed, (
         f"[{scenario.id}] {scenario.natural_language}\n"

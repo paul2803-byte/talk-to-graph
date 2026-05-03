@@ -1,5 +1,6 @@
 """Tests for Rules R5 and R6 in QueryEvaluationService."""
 import pytest
+from models.attribute_config import AttributeConfig
 from query_evaluation.query_evaluation_service import QueryEvaluationService
 
 
@@ -8,16 +9,18 @@ def service():
     return QueryEvaluationService()
 
 
-SENSITIVITY = {
-    "gehalt": "semi-sensitive",
-    "name": "sensitive",
-    "alter": "semi-sensitive",
-    "ort": "not-sensitive",
+ATTRIBUTE_CONFIGS = {
+    "gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0)),
+    "name": AttributeConfig("sensitive"),
+    "alter": AttributeConfig("semi-sensitive", bounds=(18.0, 100.0)),
+    "ort": AttributeConfig("not-sensitive"),
 }
 
-BOUNDS = {
-    "gehalt": (1000.0, 10000.0),
-    "alter": (18.0, 100.0),
+ATTRIBUTE_CONFIGS_NO_BOUNDS = {
+    "gehalt": AttributeConfig("semi-sensitive"),
+    "name": AttributeConfig("sensitive"),
+    "alter": AttributeConfig("semi-sensitive"),
+    "ort": AttributeConfig("not-sensitive"),
 }
 
 
@@ -30,7 +33,7 @@ class TestRuleR5:
             SELECT (MIN(?gehalt) AS ?minSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R5" in msg
 
@@ -40,7 +43,7 @@ class TestRuleR5:
             SELECT (MAX(?gehalt) AS ?maxSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert not ok
         assert "Rule R5" in msg
 
@@ -50,7 +53,7 @@ class TestRuleR5:
             SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
 
@@ -63,7 +66,7 @@ class TestRuleR6:
             SELECT (SUM(?gehalt) AS ?totalSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, {})  # no bounds
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS_NO_BOUNDS)  # no bounds
         assert not ok
         assert "Rule R6" in msg
 
@@ -73,7 +76,7 @@ class TestRuleR6:
             SELECT (AVG(?gehalt) AS ?avgSalary)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, {})
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS_NO_BOUNDS)
         assert not ok
         assert "Rule R6" in msg
 
@@ -84,7 +87,7 @@ class TestRuleR6:
             SELECT (COUNT(?gehalt) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, {})
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS_NO_BOUNDS)
         assert ok
 
     def test_sum_with_bounds_allowed(self, service):
@@ -93,7 +96,7 @@ class TestRuleR6:
             SELECT (SUM(?gehalt) AS ?totalSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, msg, _ = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, msg, _ = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
 
 
@@ -106,7 +109,7 @@ class TestAggregateMetadata:
             SELECT (AVG(?gehalt) AS ?avgSalary) (COUNT(?s) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, _, agg_info = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, _, agg_info = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
         assert len(agg_info) >= 1
         avg_entry = [a for a in agg_info if a["function"] == "avg"]
@@ -119,7 +122,7 @@ class TestAggregateMetadata:
             SELECT (COUNT(?gehalt) AS ?cnt)
             WHERE { ?s oyd:gehalt ?gehalt . }
         """
-        ok, _, agg_info = service.evaluate_query(query, SENSITIVITY, BOUNDS)
+        ok, _, agg_info = service.evaluate_query(query, ATTRIBUTE_CONFIGS)
         assert ok
         count_entries = [a for a in agg_info if a["function"] == "count"]
         assert len(count_entries) == 1
