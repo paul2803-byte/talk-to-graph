@@ -167,11 +167,10 @@ class OrchestratorService:
         # ── 5. Budget check ────────────────────────────────────────────
         # Use user-supplied epsilon if provided, otherwise fall back to
         # the configured default (epsilon_base).
-        epsilon_per_column = epsilon if epsilon is not None else self._config.epsilon_base
-
-        num_agg_columns = len(aggregate_info)
-        epsilon_query = self.budget_service.calculate_query_cost(
-            num_agg_columns, epsilon_override=epsilon_per_column
+        epsilon_query = epsilon if epsilon is not None else self._config.epsilon_base
+        weighted_epsilon = self.budget_service.calculate_adjusted_epsilon(
+            len(aggregate_info),
+            epsilon_query,
         )
 
         if not self.budget_service.check_budget(epsilon_query):
@@ -199,7 +198,7 @@ class OrchestratorService:
             query_results,
             aggregate_info,
             attribute_configs,
-            epsilon_per_column,
+            weighted_epsilon,
         )
 
         # ── 9. Suppress small groups (uses noisy counts) ──────────────
@@ -229,7 +228,7 @@ class OrchestratorService:
             "sessionId": sid,
             "remainingPrivacyBudget": self.budget_service.get_remaining(),
             "sessionEpsilonSpent": session.epsilon_spent,
-            "epsilonUsed": epsilon_per_column,
+            "epsilonUsed": weighted_epsilon,
             "status": "success",
             "data": {
                 "query_results": noisy_result.rows,
