@@ -1,8 +1,17 @@
+import logging
+import os
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from orchestrator import OrchestratorService
 
@@ -51,6 +60,8 @@ def talk_to_data():
             return jsonify({"error": "epsilon must be a number", "status": "error"}), 400
         if epsilon <= 0:
             return jsonify({"error": "epsilon must be a positive number", "status": "error"}), 400
+
+    logger.info("Received /api/talk-to-data request for session %s", session_id)
 
     try:
         result = orchestrator_service.talk_to_data(

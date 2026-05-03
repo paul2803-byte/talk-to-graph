@@ -29,12 +29,23 @@ Strictly adhere to the provided ontology (usually in JSON-LD):
 - Query Clauses: SELECT, WHERE, etc., must be syntactically correct for SPARQL 1.1.
 - Filters: Use FILTER for constraints.
 - Aggregation: When using AVG(...), always include a COUNT of the same grouping (e.g. COUNT(?x) AS ?count) in the SELECT clause. This is required for differential privacy noise calibration.
+- DP Grouping (Bucketing): When grouping by a metric semi-sensitive attribute, you MUST apply bucketing unless the user explicitly requests a custom size. 
+    **IMPORTANT**: Always use the BIND form to create a named alias in the WHERE clause, then GROUP BY and ORDER BY that alias. Do NOT put the bucketing expression inline in SELECT or GROUP BY.
+    1. Numeric attributes: calculate the exact bucket size as `(max_value - min_value) / number_buckets` based on the provided ontology constraints. Use standard syntax: `BIND(FLOOR(?attribute / bucket_size) AS ?bucket_attribute)` and GROUP BY ?bucket_attribute.
+    2. Date attributes: use native SPARQL time grouping based on the provided `date_granularity`. E.g., for YEAR use `BIND(YEAR(?date) AS ?bucket_date)`. For DECADE use `BIND(FLOOR(YEAR(?date) / 10) AS ?bucket_date)`. Then GROUP BY ?bucket_date.
+    3. NEVER use inline expressions like `GROUP BY (FLOOR(YEAR(?date) / 10))`. Always use BIND.
 
-4. Example
-If Ontology base is <https://example.org/> and includes Object1 with property gehalt:
-Query:
+4. Examples
+Example 1 - Simple aggregate:
 PREFIX oyd: <https://example.org/>
 SELECT (AVG(?gehalt) AS ?avg) (COUNT(?s) AS ?count) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt . }
+
+Example 2 - Decade bucketing (correct BIND form):
+PREFIX oyd: <https://example.org/>
+SELECT (AVG(?gehalt) AS ?avg_gehalt) (COUNT(?s) AS ?count) ?decade
+WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt ; oyd:geburtsdatum ?geburtsdatum . BIND(FLOOR(YEAR(?geburtsdatum) / 10) AS ?decade) }
+GROUP BY ?decade
+ORDER BY ?decade
 """.strip()
 
 
@@ -71,11 +82,33 @@ def format_user_message(ontology: Ontology, question: str) -> str:
         datatype_attrs = []
         
         for attr in obj.attributes:
-            datatype_attrs.append(
-                f"  - {ontology.prefix}:{attr.name} "
-                f"(Anonymization: {attr.anonymization_type}, "
-                f"Sensitivity: {attr.sensitivity_level})"
-            )
+            extra_details = f"Sensitivity: {attr.sensitivity_level}"
+            if attr.min_value is not None and attr.max_value is not None:
+                extra_details += f", min_value: {attr.min_value}, max_value: {attr.max_value}"
+            if attr.number_buckets is not None:
+                extra_details += f", number_buckets: {attr.number_buckets}"
+            if attr.date_granularity is not None:
+                extra_details += f", date_granularity: {attr.date_granularity}"
+
+            if attr.is_composite and attr.children:
+                datatype_attrs.append(
+                    f"  - {ontology.prefix}:{attr.name} "
+                    f"(Type: {attr.attr_type}, "
+                    f"Anonymization: {attr.anonymization_type}, "
+                    f"{extra_details})"
+                )
+                for child in attr.children:
+                    datatype_attrs.append(
+                        f"    - {ontology.prefix}:{child.name} "
+                        f"(Sensitivity: {child.sensitivity_level}, "
+                        f"inherited from {attr.name})"
+                    )
+            else:
+                datatype_attrs.append(
+                    f"  - {ontology.prefix}:{attr.name} "
+                    f"(Anonymization: {attr.anonymization_type}, "
+                    f"{extra_details})"
+                )
         
         if datatype_attrs:
             ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatype_attrs) + "\n"

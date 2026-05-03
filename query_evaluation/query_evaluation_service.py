@@ -42,6 +42,8 @@ class QueryEvaluationService:
         sensitivity_config: Dict[str, str],
         sensitivity_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
         max_semi_sensitive_group_by: int = 1,
+        sensitivity_number_buckets: Optional[Dict[str, int]] = None,
+        sensitivity_date_granularity: Optional[Dict[str, str]] = None,
     ) -> Tuple[bool, str, List[Dict[str, Any]]]:
         """
         Evaluates a SPARQL query and returns whether it is valid along with
@@ -64,6 +66,10 @@ class QueryEvaluationService:
         """
         if sensitivity_bounds is None:
             sensitivity_bounds = {}
+        if sensitivity_number_buckets is None:
+            sensitivity_number_buckets = {}
+        if sensitivity_date_granularity is None:
+            sensitivity_date_granularity = {}
 
         # Classify attributes by sensitivity
         sensitive_attrs, semi_sensitive_attrs, not_sensitive_attrs = self._classify_attributes(
@@ -92,6 +98,23 @@ class QueryEvaluationService:
 
         # Step 4: Collect GROUP BY variables
         group_by_vars = self._collect_group_by_variables(root)
+
+        # Step 4a: Collect variables used *inside* GROUP BY expressions
+        # (e.g. ?geburtsdatum inside GROUP BY (FLOOR(YEAR(?geburtsdatum)/10)))
+        group_by_expr_vars = self._collect_group_by_expression_variables(root)
+
+        # Step 4.5: Collect bucketing aliases for DP numeric/date grouping
+        bucketing_aliases, date_bucketing_aliases = self._collect_bucketing_aliases(root)
+        
+        # Propagate sensitivity and attr mappings to the bucket alias variables
+        for alias_name, (inner_name, divisor) in bucketing_aliases.items():
+            if inner_name in var_sensitivity:
+                var_sensitivity[alias_name] = var_sensitivity[inner_name]
+                var_to_attr[alias_name] = var_to_attr.get(inner_name, inner_name)
+        for alias_name, (inner_name, granularity) in date_bucketing_aliases.items():
+            if inner_name in var_sensitivity:
+                var_sensitivity[alias_name] = var_sensitivity[inner_name]
+                var_to_attr[alias_name] = var_to_attr.get(inner_name, inner_name)
 
         # Step 5: Collect detailed aggregate info (function + inner attribute)
         aggregate_details = self._collect_aggregate_details(root)
@@ -138,10 +161,12 @@ class QueryEvaluationService:
             ), []
 
         # ── Rule R3: Semi-sensitive attributes in SELECT must be aggregated ──
+        # Exception: variables that appear in GROUP BY are grouping keys,
+        # not raw-data exposure.  Their risk is managed by Rule R4 instead.
         for var in select_vars:
             var_name = str(var)
             if var_sensitivity.get(var_name) == "semi-sensitive":
-                if var not in aggregated_vars:
+                if var not in aggregated_vars and var not in group_by_vars:
                     return False, (
                         f"Query rejected: semi-sensitive attribute variable '?{var_name}' "
                         f"in SELECT must be inside an aggregate function (COUNT, AVG, etc.)."
@@ -159,12 +184,90 @@ class QueryEvaluationService:
                 f"in GROUP BY (max {max_semi_sensitive_group_by}) creates quasi-identifier risk."
             ), []
 
+        # ── Rule R9: DP Group-By Bucketing Enforcement ──
+        for var in group_by_vars:
+            var_name = str(var)
+            if var_sensitivity.get(var_name) == "semi-sensitive":
+                onto_attr = var_to_attr.get(var_name, var_name)
+                onto_attr_lower = onto_attr.lower()
+                
+                # Check Numeric Track
+                num_buckets = sensitivity_number_buckets.get(onto_attr) or sensitivity_number_buckets.get(onto_attr_lower)
+                # Check Date Track 
+                date_gran = sensitivity_date_granularity.get(onto_attr) or sensitivity_date_granularity.get(onto_attr_lower)
+                
+                # If it has bounds but no buckets defined, it's considered numeric missing its bucket config
+                bounds = sensitivity_bounds.get(onto_attr) or sensitivity_bounds.get(onto_attr_lower)
+                is_numeric_attr = bounds is not None and bounds[0] is not None
+                
+                needs_bucketing = num_buckets is not None or date_gran is not None or is_numeric_attr
+                
+                if needs_bucketing:
+                    # Check 1: Missing Definition
+                    if num_buckets is None and date_gran is None:
+                        return False, (
+                            f"Query rejected: semi-sensitive metric attribute '?{onto_attr}' in GROUP BY "
+                            f"requires predefined buckets in the ontology (Rule R9)."
+                        ), []
+                        
+                    # Target is defined. Was it used raw?
+                    if var_name not in bucketing_aliases and var_name not in date_bucketing_aliases:
+                        return False, (
+                            f"Query rejected: raw grouping on metric attribute '?{onto_attr}'. "
+                            f"Must use DP bucketing functions (Rule R9)."
+                        ), []
+
+                    if num_buckets is not None:
+                        # Validate Math Divisor
+                        if var_name not in bucketing_aliases:
+                            return False, (
+                                f"Query rejected: missing valid numeric bucketing FLOOR function for '?{var_name}' (Rule R9)."
+                            ), []
+                        _, divisor = bucketing_aliases[var_name]
+                        max_b = bounds[1] if bounds else None
+                        min_b = bounds[0] if bounds else None
+                        if max_b is None or min_b is None:
+                            return False, (f"Query rejected: missing bounds to calculate bucket size for '?{onto_attr}'.", [])
+                        expected_size = (max_b - min_b) / num_buckets
+                        if abs(divisor - expected_size) > 1e-5:
+                             return False, (
+                                f"Query rejected: incorrect bucket size for '?{onto_attr}'. Expected approx {expected_size}, got {divisor} (Rule R9)."
+                             ), []
+
+                    elif date_gran is not None:
+                        # Validate Native SPARQL wrappers
+                        if var_name not in date_bucketing_aliases:
+                            return False, (
+                                f"Query rejected: missing valid date matching function for '?{var_name}' (Rule R9)."
+                            ), []
+                        _, gran_found = date_bucketing_aliases[var_name]
+                        if gran_found != date_gran:
+                            return False, (
+                                f"Query rejected: incorrect date granularity for '?{onto_attr}'. Expected {date_gran}, got {gran_found} (Rule R9)."
+                            ), []
+
         # ── Rule R5: Block MIN/MAX/Sample/GroupConcat on semi-sensitive ──
+        # Note: rdflib uses Aggregate_Sample internally as a pass-through
+        # for GROUP BY variables projected in SELECT.  We must NOT block
+        # that synthetic usage — only explicit user-requested SAMPLE.
+        # Two cases where Aggregate_Sample is synthetic:
+        #   1. BIND form:  GROUP BY ?decade → Aggregate_Sample(vars=?decade)
+        #      Here ?decade ∈ group_by_var_names.
+        #   2. Inline form: GROUP BY (FLOOR(YEAR(?x)/10)) → Aggregate_Sample(vars=?x)
+        #      Here ?x ∉ group_by_var_names, but ?x ∈ group_by_expr_var_names.
+        group_by_var_names = {str(v) for v in group_by_vars}
+        group_by_expr_var_names = {str(v) for v in group_by_expr_vars}
         for detail in aggregate_details:
             inner_attr = detail.get("inner_attribute")
             agg_func = detail["agg_function"]
             if inner_attr and var_sensitivity.get(inner_attr) == "semi-sensitive":
                 if agg_func in self._BLOCKED_AGGREGATES:
+                    # Skip synthetic Aggregate_Sample for GROUP BY keys
+                    if agg_func == "Aggregate_Sample" and (
+                        inner_attr in group_by_var_names
+                        or inner_attr in group_by_expr_var_names
+                    ):
+                        continue
                     return False, (
                         f"Query rejected: {agg_func} on semi-sensitive attribute "
                         f"'?{inner_attr}' is not allowed (Rule R5)."
@@ -536,6 +639,62 @@ class QueryEvaluationService:
                         if isinstance(item, CompValue):
                             self._walk_group_by(item, group_vars)
 
+    def _collect_group_by_expression_variables(self, node) -> Set[Variable]:
+        """Collect variables used *inside* GROUP BY expressions.
+
+        When GROUP BY uses an inline expression like
+        ``GROUP BY (FLOOR(YEAR(?geburtsdatum) / 10))``, rdflib translates this
+        into a Group node with ``expr=[None]`` and an Extend child whose
+        ``var=None``.  The actual grouping expression (containing the source
+        variable) lives inside that Extend's ``expr``.
+
+        This method extracts those inner variables so that Rule R5 can
+        recognise the synthetic ``Aggregate_Sample`` on them.
+        """
+        expr_vars: Set[Variable] = set()
+        self._walk_group_by_expressions(node, expr_vars)
+        return expr_vars
+
+    def _walk_group_by_expressions(self, node, expr_vars: Set[Variable]):
+        """Walk the tree to find Group nodes with expression-based grouping."""
+        if not isinstance(node, CompValue):
+            return
+
+        if node.name == "Group":
+            expr_list = node.get("expr") or []
+            has_none_expr = any(item is None for item in expr_list)
+            if has_none_expr:
+                # Look inside the Group's child for Extend with var=None
+                inner = node.get("p")
+                self._extract_group_extend_vars(inner, expr_vars)
+
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._walk_group_by_expressions(child, expr_vars)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._walk_group_by_expressions(item, expr_vars)
+
+    def _extract_group_extend_vars(self, node, expr_vars: Set[Variable]):
+        """Extract variables from Extend nodes with var=None inside a Group.
+
+        These represent inline GROUP BY expressions lowered by rdflib.
+        """
+        if not isinstance(node, CompValue):
+            return
+        if node.name == "Extend":
+            alias = node.get("var")
+            expr = node.get("expr")
+            if alias is None and expr is not None:
+                # This is an inline GROUP BY expression — extract all
+                # source variables from the expression tree.
+                self._extract_variables_from_expr(expr, expr_vars)
+            # Continue into nested Extends
+            inner = node.get("p")
+            self._extract_group_extend_vars(inner, expr_vars)
+
     # ──────────────────────────────────────────────────────────────────────
     # Aggregate detail extraction (for Rules R5/R6 + downstream metadata)
     # ──────────────────────────────────────────────────────────────────────
@@ -639,4 +798,63 @@ class QueryEvaluationService:
                     if isinstance(item, CompValue):
                         self._link_extend_aliases(item, agg_map, details)
 
+    def _collect_bucketing_aliases(self, node) -> Tuple[Dict[str, Tuple[str, float]], Dict[str, Tuple[str, str]]]:
+        """
+        Scan for Extend nodes that look like:
+        Numeric: FLOOR(?var / Y) AS ?alias
+        Date: YEAR(?var) AS ?alias OR FLOOR(YEAR(?var) / 10) AS ?alias
+        
+        Returns: 
+            (numeric_aliases, date_aliases)
+            where numeric_aliases maps alias_name -> (inner_var_name, divisor)
+            and date_aliases maps alias_name -> (inner_var_name, granularity_string)
+        """
+        num_aliases: Dict[str, Tuple[str, float]] = {}
+        date_aliases: Dict[str, Tuple[str, str]] = {}
+        self._walk_bucketing(node, num_aliases, date_aliases)
+        return num_aliases, date_aliases
 
+    def _walk_bucketing(self, node, num_aliases, date_aliases):
+        if not isinstance(node, CompValue):
+            return
+            
+        if node.name == "Extend":
+            alias = node.get("var")
+            expr = node.get("expr")
+            if isinstance(alias, Variable) and isinstance(expr, CompValue):
+                alias_name = str(alias)
+                # Check for Builtin_FLOOR
+                if expr.name == "Builtin_FLOOR":
+                    arg = expr.get("arg")
+                    if isinstance(arg, CompValue) and arg.name == "MultiplicativeExpression":
+                        op = arg.get("op")
+                        left = arg.get("expr")
+                        right = arg.get("other", [])
+                        if op == ['/'] and isinstance(left, Variable) and right and isinstance(right[0], Literal):
+                            try:
+                                divisor = float(right[0].toPython())
+                                num_aliases[alias_name] = (str(left), divisor)
+                            except (ValueError, TypeError):
+                                pass
+                        elif op == ['/'] and isinstance(left, CompValue) and left.name == "Builtin_YEAR" and right and isinstance(right[0], Literal):
+                             inner_arg = left.get("arg")
+                             if isinstance(inner_arg, Variable):
+                                 try:
+                                     divisor = float(right[0].toPython())
+                                     if divisor == 10.0:
+                                        date_aliases[alias_name] = (str(inner_arg), "DECADE")
+                                 except (ValueError, TypeError):
+                                     pass
+                elif expr.name == "Builtin_YEAR":
+                    arg = expr.get("arg")
+                    if isinstance(arg, Variable):
+                        date_aliases[alias_name] = (str(arg), "YEAR")
+                    
+        for key in node.keys():
+            child = node[key]
+            if isinstance(child, CompValue):
+                self._walk_bucketing(child, num_aliases, date_aliases)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, CompValue):
+                        self._walk_bucketing(item, num_aliases, date_aliases)
