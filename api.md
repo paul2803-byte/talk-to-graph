@@ -49,11 +49,12 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `question` | `string` | **Yes** | Natural language question to ask about the data. |
+| `question` | `string` | **Yes** | Natural language question to ask about the data. Required even if `adjusted_query` is provided for context. |
 | `data` | `object` | No (default `{}`) | JSON-LD data payload to query against. |
 | `ontology_url` | `string` | **Yes** | URL of the SOYA ontology endpoint (the service appends `/yaml` internally). |
 | `sessionId` | `string` | No | UUID of an existing session. Omit or set to `null` to start a new session. |
 | `epsilon` | `number` | No | Per-column ε value for this query. Must be a positive number. When omitted the server default (`EPSILON_BASE` env variable) is used. A higher value means more budget consumed but less noise; a lower value means less budget consumed but more noise. The global budget check still applies — the request is rejected with `BUDGET_EXHAUSTED` if the remaining budget is insufficient. |
+| `adjusted_query` | `string` | No | An optional SPARQL query provided by the user. If provided, the service will bypass the LLM query generation step and execute this query directly, applying all subsequent validation and privacy steps. |
 
 ### Request Example
 
@@ -73,7 +74,8 @@ Main endpoint. Accepts a natural language question together with a JSON-LD datas
   },
   "ontology_url": "https://soya.ownyourdata.eu/AnonymisationDemo2",
   "sessionId": "c7f3b2a1-9d4e-4f8a-b6c1-2e5d7a3f9b0e",
-  "epsilon": 0.05
+  "epsilon": 0.05,
+  "adjusted_query": "PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>\nSELECT (AVG(?gehalt) AS ?averageSalary) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt . }"
 }
 ```
 
