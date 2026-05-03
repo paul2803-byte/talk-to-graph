@@ -17,14 +17,14 @@ class TestCountNoise:
     def test_noise_is_added_to_count(self, service):
         rows = [{"cnt": 100}]
         agg = [{"variable": "cnt", "function": "count", "attribute": None}]
-        result = service.add_noise(rows, agg, {}, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, {}, weighted_epsilon=0.5)
         assert result.rows[0]["cnt"] != 100, "Noise should change the value"
 
     def test_laplace_scale_for_count(self, service):
         """Scale should be 1/ε.  With many draws, mean should ≈ original."""
         rows = [{"cnt": 1000}] * 200
         agg = [{"variable": "cnt", "function": "count", "attribute": None}]
-        result = service.add_noise(rows, agg, {}, epsilon_base=1.0)
+        result = service.add_noise(rows, agg, {}, weighted_epsilon=1.0)
         values = [r["cnt"] for r in result.rows]
         mean_noise = sum(v - 1000 for v in values) / len(values)
         assert abs(mean_noise) < 5, f"Mean noise should be ~0, got {mean_noise}"
@@ -34,8 +34,8 @@ class TestCountNoise:
         s2 = NoiseService(seed=99)
         rows = [{"cnt": 50}]
         agg = [{"variable": "cnt", "function": "count", "attribute": None}]
-        r1 = s1.add_noise(rows, agg, {}, epsilon_base=0.5)
-        r2 = s2.add_noise([{"cnt": 50}], agg, {}, epsilon_base=0.5)
+        r1 = s1.add_noise(rows, agg, {}, weighted_epsilon=0.5)
+        r2 = s2.add_noise([{"cnt": 50}], agg, {}, weighted_epsilon=0.5)
         assert r1.rows[0]["cnt"] == r2.rows[0]["cnt"]
 
 
@@ -46,13 +46,13 @@ class TestSumNoise:
         rows = [{"total": 5000.0}]
         agg = [{"variable": "total", "function": "sum", "attribute": "gehalt"}]
         attribute_configs = {"gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0))}
-        result = service.add_noise(rows, agg, attribute_configs, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, attribute_configs, weighted_epsilon=0.5)
         assert result.rows[0]["total"] != 5000.0
 
     def test_no_bounds_skips_noise(self, service):
         rows = [{"total": 5000.0}]
         agg = [{"variable": "total", "function": "sum", "attribute": "gehalt"}]
-        result = service.add_noise(rows, agg, {}, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, {}, weighted_epsilon=0.5)
         # Without bounds, noise cannot be added — value should remain unchanged
         assert result.rows[0]["total"] == 5000.0
 
@@ -68,7 +68,7 @@ class TestAvgNoise:
             {"variable": "avgSalary", "function": "avg", "attribute": "gehalt"},
         ]
         attribute_configs = {"gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0))}
-        result = service.add_noise(rows, agg, attribute_configs, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, attribute_configs, weighted_epsilon=0.5)
         assert result.rows[0]["avgSalary"] != 5000.0
 
     def test_avg_without_count_falls_back(self, service):
@@ -76,13 +76,13 @@ class TestAvgNoise:
         rows = [{"avgSalary": 5000.0}]
         agg = [{"variable": "avgSalary", "function": "avg", "attribute": "gehalt"}]
         attribute_configs = {"gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0))}
-        result = service.add_noise(rows, agg, attribute_configs, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, attribute_configs, weighted_epsilon=0.5)
         assert result.rows[0]["avgSalary"] != 5000.0
 
     def test_no_bounds_skips_avg_noise(self, service):
         rows = [{"avgSalary": 5000.0}]
         agg = [{"variable": "avgSalary", "function": "avg", "attribute": "gehalt"}]
-        result = service.add_noise(rows, agg, {}, epsilon_base=0.5)
+        result = service.add_noise(rows, agg, {}, weighted_epsilon=0.5)
         assert result.rows[0]["avgSalary"] == 5000.0
 
     def test_clipped_mean_produces_reasonable_values(self):
@@ -94,7 +94,7 @@ class TestAvgNoise:
             {"variable": "avg", "function": "avg", "attribute": "gehalt"},
         ]
         attribute_configs = {"gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0))}
-        result = svc.add_noise(rows, agg, attribute_configs, epsilon_base=1.0)
+        result = svc.add_noise(rows, agg, attribute_configs, weighted_epsilon=1.0)
         mean_noisy = sum(r["avg"] for r in result.rows) / len(result.rows)
         assert abs(mean_noisy - 5000.0) < 500, (
             f"Noisy mean {mean_noisy:.1f} deviates too far from 5000"
@@ -109,7 +109,7 @@ class TestAvgNoise:
             {"variable": "avgSalary", "function": "avg", "attribute": "gehalt"},
         ]
         attribute_configs = {"gehalt": AttributeConfig("semi-sensitive", bounds=(1000.0, 10000.0))}
-        result = svc.add_noise(rows, agg, attribute_configs, epsilon_base=1.0)
+        result = svc.add_noise(rows, agg, attribute_configs, weighted_epsilon=1.0)
         # With ε=1, Lap(1/ε)=Lap(1), variance=2. Over 500 draws mean noise ≈ 0
         mean_count_noise = sum(r["cnt"] - 100 for r in result.rows) / len(result.rows)
         assert abs(mean_count_noise) < 2, (

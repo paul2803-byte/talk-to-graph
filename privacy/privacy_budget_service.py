@@ -18,20 +18,17 @@ class PrivacyBudgetService:
 
     # ── public API ──────────────────────────────────────────────────────
 
-    def calculate_query_cost(
+    def calculate_adjusted_epsilon(
         self,
         num_aggregate_columns: int,
         epsilon_override: Optional[float] = None,
     ) -> float:
-        """Return the ε cost for a query with *num_aggregate_columns* aggregates.
-
-        If *epsilon_override* is provided it is used as the per-column ε
-        instead of the configured ``epsilon_base``.
+        """Return the ε weighted by the number of aggregate columns.
         """
         if num_aggregate_columns <= 0:
             return 0.0
         eps = epsilon_override if epsilon_override is not None else self._config.epsilon_base
-        return eps * num_aggregate_columns
+        return eps / num_aggregate_columns
 
     def check_budget(self, epsilon_query: float) -> bool:
         """Return True if the remaining budget can cover *epsilon_query*."""

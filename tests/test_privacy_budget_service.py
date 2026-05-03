@@ -14,26 +14,26 @@ def service(config):
     return PrivacyBudgetService(config)
 
 
-class TestCalculateQueryCost:
+class TestCalculateAdjustedEpsilon:
     def test_single_column(self, service):
-        assert service.calculate_query_cost(1) == pytest.approx(0.1)
+        assert service.calculate_adjusted_epsilon(1) == pytest.approx(0.1)
 
     def test_multiple_columns(self, service):
-        assert service.calculate_query_cost(3) == pytest.approx(0.3)
+        assert service.calculate_adjusted_epsilon(3) == pytest.approx(0.1 / 3)
 
     def test_zero_columns(self, service):
-        assert service.calculate_query_cost(0) == 0.0
+        assert service.calculate_adjusted_epsilon(0) == 0.0
 
     def test_epsilon_override_single_column(self, service):
         """User-supplied epsilon should replace the default epsilon_base."""
-        assert service.calculate_query_cost(1, epsilon_override=0.05) == pytest.approx(0.05)
+        assert service.calculate_adjusted_epsilon(1, epsilon_override=0.05) == pytest.approx(0.05)
 
     def test_epsilon_override_multiple_columns(self, service):
-        assert service.calculate_query_cost(3, epsilon_override=0.2) == pytest.approx(0.6)
+        assert service.calculate_adjusted_epsilon(3, epsilon_override=0.2) == pytest.approx(0.2 / 3)
 
     def test_epsilon_override_none_uses_default(self, service):
         """Passing None should behave the same as omitting the argument."""
-        assert service.calculate_query_cost(2, epsilon_override=None) == pytest.approx(0.2)
+        assert service.calculate_adjusted_epsilon(2, epsilon_override=None) == pytest.approx(0.1 / 2)
 
 
 class TestBudgetChecking:
@@ -62,8 +62,8 @@ class TestBudgetDeduction:
         assert service.check_budget(0.2) is False
 
     def test_multi_column_exhaustion(self, service):
-        """A query with 10 columns costs 1.0, exhausting the budget."""
-        cost = service.calculate_query_cost(10)
+        """A query with epsilon=1.0 exhausts the budget."""
+        cost = 1.0
         assert service.check_budget(cost) is True
         service.deduct_budget(cost)
         assert service.get_remaining() == pytest.approx(0.0)

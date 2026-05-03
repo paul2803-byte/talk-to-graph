@@ -29,7 +29,7 @@ class NoiseService:
         query_results: List[Dict[str, Any]],
         aggregate_info: List[Dict[str, str]],
         attribute_configs: Dict[str, 'AttributeConfig'],
-        epsilon_base: float,
+        weighted_epsilon: float,
     ) -> NoisyResult:
         """Add Laplace noise to every aggregate column in *query_results*.
 
@@ -76,12 +76,12 @@ class NoiseService:
             bounds = cfg.bounds if cfg else None
 
             if func == "count":
-                self._add_count_noise(noisy_results, var, epsilon_base)
+                self._add_count_noise(noisy_results, var, weighted_epsilon)
             elif func == "sum":
-                self._add_sum_noise(noisy_results, var, bounds, epsilon_base)
+                self._add_sum_noise(noisy_results, var, bounds, weighted_epsilon)
             elif func == "avg":
                 self._add_avg_noise_clipped_mean(
-                    noisy_results, var, bounds, epsilon_base, true_counts
+                    noisy_results, var, bounds, weighted_epsilon, true_counts
                 )
             else:
                 logger.warning("Unknown aggregate function '%s' – skipping noise for %s", func, var)
