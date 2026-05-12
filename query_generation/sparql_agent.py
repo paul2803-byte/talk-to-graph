@@ -49,25 +49,70 @@ ORDER BY ?decade
 """.strip()
 
 
-def get_sparql_agent_prompt() -> str:
+SPARQL_AGENT_GENERAL_PROMPT = """
+1. Role & Objective
+You are an expert Semantic Web Engineer. Your sole task is to translate natural language questions into valid, optimized SPARQL 1.1 queries based on a provided ontology.
+- OUTPUT: Return ONLY the raw SPARQL query. 
+- FORMATTING: Do NOT wrap the query in markdown code blocks like ```sparql ... ```. Do NOT include any explanations, preambles, or post-scripts.
+- Constraint: Do NOT execute the query.
+- Constraint: Do NOT provide the answer to the question.
+
+2. Knowledge Context (The Ontology)
+Strictly adhere to the provided ontology (usually in JSON-LD):
+- Prefixes: 
+    - Always look for the `@base` and `@context` in the JSON-LD. Use the `@base` URI for the default namespace (e.g., `PREFIX oyd: <...>`).
+    - Use standard prefixes (rdf:, rdfs:, owl:, xsd:).
+- Classes & Properties: 
+    - Use ONLY the URIs and IDs defined in the `@graph`.
+    - Pay close attention to `domain` and `range`. If a property is defined for `Object1`, do not use it with `Object2`.
+    - If Object1 is a subclass of something, respect that hierarchy.
+- Closed World Assumption: If a class or property is not in the ontology, do NOT invent it. If you cannot answer the question with the given ontology, state exactly what is missing.
+
+3. Structural Requirements
+- Prefix Declarations: Include all necessary namespaces.
+- Query Clauses: SELECT, WHERE, etc., must be syntactically correct for SPARQL 1.1.
+- Filters: Use FILTER for constraints.
+- Aggregation: Use GROUP BY and aggregate functions as needed.
+
+4. Examples
+Example 1 - Simple aggregate:
+PREFIX oyd: <https://example.org/>
+SELECT (AVG(?gehalt) AS ?avg) WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt . }
+
+Example 2 - Grouped query:
+PREFIX oyd: <https://example.org/>
+SELECT ?geschlecht (AVG(?gehalt) AS ?avg_gehalt)
+WHERE { ?s a oyd:Object1 ; oyd:gehalt ?gehalt ; oyd:geschlecht ?geschlecht . }
+GROUP BY ?geschlecht
+""".strip()
+
+
+def get_sparql_agent_prompt(privacy_mode: bool = True) -> str:
     """
     Returns the system prompt for the SPARQL generation agent.
+    
+    Args:
+        privacy_mode: If True, returns the DP-aware prompt with bucketing
+            and aggregation rules. If False, returns the general prompt.
     
     Returns:
         str: The system prompt string.
     """
-    return SPARQL_AGENT_SYSTEM_PROMPT
+    return SPARQL_AGENT_SYSTEM_PROMPT if privacy_mode else SPARQL_AGENT_GENERAL_PROMPT
 
 
 from models.ontology import Ontology
 
-def format_user_message(ontology: Ontology, question: str) -> str:
+def format_user_message(ontology: Ontology, question: str, privacy_mode: bool = True) -> str:
     """
     Formats the user message containing the structured ontology and question.
     
     Args:
         ontology: The structured Ontology object.
         question: The user's natural language question.
+        privacy_mode: If True, includes sensitivity metadata (anonymization
+            type, sensitivity level, buckets, granularity). If False, only
+            includes attribute names and types.
     
     Returns:
         str: The formatted user message for the LLM.
@@ -82,33 +127,52 @@ def format_user_message(ontology: Ontology, question: str) -> str:
         datatype_attrs = []
         
         for attr in obj.attributes:
-            extra_details = f"Sensitivity: {attr.sensitivity_level}"
-            if attr.min_value is not None and attr.max_value is not None:
-                extra_details += f", min_value: {attr.min_value}, max_value: {attr.max_value}"
-            if attr.number_buckets is not None:
-                extra_details += f", number_buckets: {attr.number_buckets}"
-            if attr.date_granularity is not None:
-                extra_details += f", date_granularity: {attr.date_granularity}"
+            if privacy_mode:
+                # Privacy mode: include sensitivity metadata for DP-aware generation
+                extra_details = f"Sensitivity: {attr.sensitivity_level}"
+                if attr.min_value is not None and attr.max_value is not None:
+                    extra_details += f", min_value: {attr.min_value}, max_value: {attr.max_value}"
+                if attr.number_buckets is not None:
+                    extra_details += f", number_buckets: {attr.number_buckets}"
+                if attr.date_granularity is not None:
+                    extra_details += f", date_granularity: {attr.date_granularity}"
 
-            if attr.is_composite and attr.children:
-                datatype_attrs.append(
-                    f"  - {ontology.prefix}:{attr.name} "
-                    f"(Type: {attr.attr_type}, "
-                    f"Anonymization: {attr.anonymization_type}, "
-                    f"{extra_details})"
-                )
-                for child in attr.children:
+                if attr.is_composite and attr.children:
                     datatype_attrs.append(
-                        f"    - {ontology.prefix}:{child.name} "
-                        f"(Sensitivity: {child.sensitivity_level}, "
-                        f"inherited from {attr.name})"
+                        f"  - {ontology.prefix}:{attr.name} "
+                        f"(Type: {attr.attr_type}, "
+                        f"Anonymization: {attr.anonymization_type}, "
+                        f"{extra_details})"
+                    )
+                    for child in attr.children:
+                        datatype_attrs.append(
+                            f"    - {ontology.prefix}:{child.name} "
+                            f"(Sensitivity: {child.sensitivity_level}, "
+                            f"inherited from {attr.name})"
+                        )
+                else:
+                    datatype_attrs.append(
+                        f"  - {ontology.prefix}:{attr.name} "
+                        f"(Anonymization: {attr.anonymization_type}, "
+                        f"{extra_details})"
                     )
             else:
-                datatype_attrs.append(
-                    f"  - {ontology.prefix}:{attr.name} "
-                    f"(Anonymization: {attr.anonymization_type}, "
-                    f"{extra_details})"
-                )
+                # General mode: only include attribute name and type
+                if attr.is_composite and attr.children:
+                    datatype_attrs.append(
+                        f"  - {ontology.prefix}:{attr.name} "
+                        f"(Type: {attr.attr_type})"
+                    )
+                    for child in attr.children:
+                        datatype_attrs.append(
+                            f"    - {ontology.prefix}:{child.name} "
+                            f"(inherited from {attr.name})"
+                        )
+                else:
+                    datatype_attrs.append(
+                        f"  - {ontology.prefix}:{attr.name} "
+                        f"(Type: {attr.attr_type})"
+                    )
         
         if datatype_attrs:
             ontology_md += "- **Attributes (Datatype Properties)**:\n" + "\n".join(datatype_attrs) + "\n"
