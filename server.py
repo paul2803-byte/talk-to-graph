@@ -36,7 +36,8 @@ def talk_to_data():
         "data": {},
         "ontology_url": "url",
         "sessionId": "optional string",
-        "adjusted_query": "optional string"
+        "adjusted_query": "optional string",
+        "privacy_mode": "optional boolean (default true)"
     }
     """
     request_data = request.get_json()
@@ -50,12 +51,17 @@ def talk_to_data():
     session_id = request_data.get("sessionId")
     epsilon = request_data.get("epsilon")
     adjusted_query = request_data.get("adjusted_query")
+    privacy_mode = request_data.get("privacy_mode", True)
 
     if not question:
         return jsonify({"error": "Question is required", "status": "error"}), 400
     if ontology_url is None:
         return jsonify({"error": "Ontology URL is required", "status": "error"}), 400
-    if epsilon is not None:
+    if not isinstance(privacy_mode, bool):
+        return jsonify({"error": "privacy_mode must be a boolean", "status": "error"}), 400
+
+    # Epsilon validation only applies in privacy mode
+    if privacy_mode and epsilon is not None:
         try:
             epsilon = float(epsilon)
         except (TypeError, ValueError):
@@ -63,11 +69,13 @@ def talk_to_data():
         if epsilon <= 0:
             return jsonify({"error": "epsilon must be a positive number", "status": "error"}), 400
 
-    logger.info("Received /api/talk-to-data request for session %s", session_id)
+    logger.info("Received /api/talk-to-data request for session %s (privacy_mode=%s)", session_id, privacy_mode)
 
     try:
         result = orchestrator_service.talk_to_data(
-            question, data_payload, ontology_url, session_id=session_id, epsilon=epsilon, adjusted_query=adjusted_query
+            question, data_payload, ontology_url,
+            session_id=session_id, epsilon=epsilon,
+            adjusted_query=adjusted_query, privacy_mode=privacy_mode,
         )
         return jsonify(result)
     except Exception as e:

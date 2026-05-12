@@ -39,13 +39,15 @@ class QueryGenerator:
             model=model,
         )
 
-    def generate(self, ontology: Ontology, question: str) -> str:
+    def generate(self, ontology: Ontology, question: str, privacy_mode: bool = True) -> str:
         """
         Generate a SPARQL query from a natural language question.
 
         Args:
             ontology: The structured Ontology object.
             question: The user's natural language question.
+            privacy_mode: If True, uses the DP-aware prompt and includes
+                sensitivity metadata. If False, uses the general prompt.
 
         Returns:
             str: The generated SPARQL query.
@@ -53,8 +55,8 @@ class QueryGenerator:
         Raises:
             QueryGeneratorError: If query generation fails.
         """
-        system_prompt = get_sparql_agent_prompt()
-        user_message = format_user_message(ontology, question)
+        system_prompt = get_sparql_agent_prompt(privacy_mode=privacy_mode)
+        user_message = format_user_message(ontology, question, privacy_mode=privacy_mode)
 
         try:
             result = self._llm_client.call(system_prompt, user_message)
@@ -80,13 +82,15 @@ class QueryGenerator:
 _default_generator: Optional[QueryGenerator] = None
 
 
-def generate_sparql_query(ontology: Ontology, question: str) -> str:
+def generate_sparql_query(ontology: Ontology, question: str, privacy_mode: bool = True) -> str:
     """
     Generate a SPARQL query from a natural language question.
 
     Args:
         ontology: The structured Ontology object.
         question: The user's natural language question.
+        privacy_mode: If True, uses the DP-aware prompt and includes
+            sensitivity metadata. If False, uses the general prompt.
 
     Returns:
         str: The generated SPARQL query.
@@ -96,4 +100,4 @@ def generate_sparql_query(ontology: Ontology, question: str) -> str:
     if _default_generator is None:
         _default_generator = QueryGenerator()
 
-    return _default_generator.generate(ontology, question)
+    return _default_generator.generate(ontology, question, privacy_mode=privacy_mode)

@@ -19,38 +19,60 @@
 
 ## Overview
 
-The **Talk-to-Data Service** allows users to ask natural language questions against a Linked Data dataset while enforcing **differential privacy** (DP). The service:
+The **Talk-to-Data Service** allows users to ask natural language questions against a Linked Data dataset. It operates in two modes, controlled per-request via a `privacy_mode` boolean flag:
+
+| Mode | `privacy_mode` | Behaviour |
+|------|---------------|-----------|
+| **Privacy** (default) | `true` | Full differential privacy pipeline: query evaluation (R1–R9), budget tracking, Laplace noise, small-group suppression |
+| **General** | `false` | No privacy checks: skip evaluation, budget, noise, suppression — return raw query results |
+
+### Privacy Mode Pipeline
 
 1. Fetches an **ontology** (schema definition with sensitivity annotations) from a remote SOYA endpoint.
-2. Translates a user question into a **SPARQL query** via an LLM.
-3. **Evaluates** the query against six static privacy rules (R1–R6) to prevent sensitive data leakage.
+2. Translates a user question into a **SPARQL query** via an LLM (DP-aware prompt with bucketing rules).
+3. **Evaluates** the query against static privacy rules (R1–R9) to prevent sensitive data leakage.
 4. Checks and deducts from a global **privacy budget** (ε-based).
 5. **Executes** the SPARQL query on the provided JSON-LD data.
 6. Applies **Laplace noise** to aggregate results and **suppresses small groups**.
-7. Generates a **natural language response** using an LLM with numeric output validation.
-8. Returns the response together with session metadata and remaining budget.
+7. Humanizes bucket labels (shared result transformation).
+8. Generates a **natural language response** using an LLM with numeric output validation.
+9. Returns the response together with session metadata and remaining budget.
+
+### General Mode Pipeline
+
+1. Fetches an **ontology** (without sensitivity metadata in the LLM prompt).
+2. Translates a user question into a **SPARQL query** via an LLM (general prompt, no DP rules).
+3. **Executes** the SPARQL query on the provided JSON-LD data.
+4. Humanizes bucket labels (shared result transformation).
+5. Generates a **natural language response** using an LLM.
+6. Returns the response (no privacy budget fields).
 
 ```
- User Question + JSON-LD Data + Ontology URL
+ User Question + JSON-LD Data + Ontology URL + privacy_mode
                 │
                 ▼
- ┌──────────────────────────────────────────────────┐
- │               OrchestratorService                │
- │                                                  │
- │  1. Fetch Ontology                               │
- │  2. Generate SPARQL          (LLM)               │
- │  3. Evaluate Query           (Rules R1–R6)       │
- │  4. Check Privacy Budget                         │
- │  5. Deduct Budget                                │
- │  6. Execute SPARQL           (rdflib)            │
- │  7. Add Laplace Noise                            │
- │  8. Suppress Small Groups                        │
- │  9. Generate NL Response     (LLM + validation)  │
- │ 10. Return Response                              │
- └──────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────────┐
+ │               OrchestratorService                           │
+ │                                                             │
+ │  1. Fetch Ontology                                          │
+ │  2. Generate SPARQL             (LLM, mode-aware prompt)    │
+ │  ┌─── if privacy_mode=true ─────────────────────────────┐   │
+ │  │  3. Evaluate Query           (Rules R1–R9)            │   │
+ │  │  4. Check Privacy Budget                              │   │
+ │  │  5. Deduct Budget                                     │   │
+ │  └───────────────────────────────────────────────────────┘   │
+ │  6. Execute SPARQL              (rdflib)                     │
+ │  ┌─── if privacy_mode=true ─────────────────────────────┐   │
+ │  │  7. Add Laplace Noise                                 │   │
+ │  │  8. Suppress Small Groups                             │   │
+ │  └───────────────────────────────────────────────────────┘   │
+ │  9. Humanize Bucket Labels      (shared)                     │
+ │ 10. Generate NL Response        (LLM + validation)           │
+ │ 11. Return Response                                          │
+ └──────────────────────────────────────────────────────────────┘
                 │
                 ▼
- JSON response: { response, sessionId, remainingPrivacyBudget, data, ... }
+ JSON response: { response, sessionId, privacy_mode, data, ... }
 ```
 
 ---

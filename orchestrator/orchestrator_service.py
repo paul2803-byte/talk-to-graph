@@ -46,9 +46,12 @@ class OrchestratorService:
         error_code: str,
         session_id: str,
         conversation_history: list,
+        privacy_mode: bool = True,
     ) -> dict:
         """Return a standardised error dict.  The user-safe message is also
-        appended to the conversation history as an assistant turn."""
+        appended to the conversation history as an assistant turn.
+
+        When *privacy_mode* is False, privacy-related fields are omitted."""
         message = _ERROR_MESSAGES.get(error_code, "An unexpected error occurred.")
 
         # Append the error message to conversation history
@@ -56,16 +59,21 @@ class OrchestratorService:
         session = self.session_service.get_session(session_id)
         history = session.conversation_history if session else conversation_history
 
-        return {
+        response = {
             "response": message,
             "sessionId": session_id,
-            "remainingPrivacyBudget": self.budget_service.get_remaining(),
-            "sessionEpsilonSpent": session.epsilon_spent if session else 0.0,
+            "privacy_mode": privacy_mode,
             "status": "error",
             "errorCode": error_code,
             "data": None,
             "conversationHistory": list(history),
         }
+
+        if privacy_mode:
+            response["remainingPrivacyBudget"] = self.budget_service.get_remaining()
+            response["sessionEpsilonSpent"] = session.epsilon_spent if session else 0.0
+
+        return response
 
     # ── main pipeline ───────────────────────────────────────────────────
 
@@ -77,14 +85,20 @@ class OrchestratorService:
         session_id: Optional[str] = None,
         epsilon: Optional[float] = None,
         adjusted_query: Optional[str] = None,
+        privacy_mode: bool = True,
     ) -> dict:
         """
         Orchestration method to coordinate calls between different services.
 
-        Pipeline:
-            fetch ontology → generate SPARQL → static eval (R1-R6)
+        Pipeline (privacy_mode=True — full DP pipeline):
+            fetch ontology → generate SPARQL → static eval (R1-R9)
             → budget check → deduct budget → execute → add noise
-            → suppress small groups → generate NL response → return
+            → suppress small groups → humanize buckets
+            → generate NL response → return
+
+        Pipeline (privacy_mode=False — general mode):
+            fetch ontology → generate SPARQL → execute
+            → humanize buckets → generate NL response → return
         """
         # ── 0. Session management ──────────────────────────────────────
         session = self.session_service.get_or_create_session(session_id)
@@ -101,7 +115,8 @@ class OrchestratorService:
         except Exception as e:
             logger.error("Ontology fetch failed: %s", e)
             return self._error_response(
-                "ONTOLOGY_FETCH_FAILED", sid, session.conversation_history
+                "ONTOLOGY_FETCH_FAILED", sid, session.conversation_history,
+                privacy_mode=privacy_mode,
             )
 
         # ── 2. Generate SPARQL query ───────────────────────────────────
@@ -110,7 +125,9 @@ class OrchestratorService:
             logger.info("Using provided adjusted SPARQL query.")
         else:
             try:
-                sparql_query = generate_sparql_query(ontology_obj, question)
+                sparql_query = generate_sparql_query(
+                    ontology_obj, question, privacy_mode=privacy_mode
+                )
                 # test queries for saving tokens during development
                 sparql_query_test = """
                     PREFIX oyd: <https://soya.ownyourdata.eu/AnonymisationDemo2/>
@@ -132,7 +149,8 @@ class OrchestratorService:
             except Exception as e:
                 logger.error("SPARQL generation failed: %s", e)
                 return self._error_response(
-                    "QUERY_GENERATION_FAILED", sid, session.conversation_history
+                    "QUERY_GENERATION_FAILED", sid, session.conversation_history,
+                    privacy_mode=privacy_mode,
                 )
 
         # ── 3. Build sensitivity config and bounds from ontology ───────
@@ -157,36 +175,42 @@ class OrchestratorService:
             for attr in obj.attributes:
                 _register_attr(attr)
 
-        # ── 4. Static evaluation (R1-R9) ──────────────────────────────
-        is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(
-            sparql_query, attribute_configs,
-            max_semi_sensitive_group_by=self._config.max_semi_sensitive_group_by,
-        )
-
-        if not is_valid:
-            logger.warning("Query rejected: %s", eval_message)
-            return self._error_response(
-                "QUERY_REJECTED", sid, session.conversation_history
+        # ── 4. Static evaluation (R1-R9) — privacy mode only ──────────────
+        if privacy_mode:
+            is_valid, eval_message, aggregate_info = self.evaluation_service.evaluate_query(
+                sparql_query, attribute_configs,
+                max_semi_sensitive_group_by=self._config.max_semi_sensitive_group_by,
             )
 
-        # ── 5. Budget check ────────────────────────────────────────────
-        # Use user-supplied epsilon if provided, otherwise fall back to
-        # the configured default (epsilon_base).
-        epsilon_query = epsilon if epsilon is not None else self._config.epsilon_base
-        weighted_epsilon = self.budget_service.calculate_adjusted_epsilon(
-            len(aggregate_info),
-            epsilon_query,
-        )
+            if not is_valid:
+                logger.warning("Query rejected: %s", eval_message)
+                return self._error_response(
+                    "QUERY_REJECTED", sid, session.conversation_history,
+                    privacy_mode=privacy_mode,
+                )
+        else:
+            aggregate_info = []
 
-        if not self.budget_service.check_budget(epsilon_query):
-            return self._error_response(
-                "BUDGET_EXHAUSTED", sid, session.conversation_history
+        # ── 5. Budget check — privacy mode only ───────────────────────────
+        if privacy_mode:
+            # Use user-supplied epsilon if provided, otherwise fall back to
+            # the configured default (epsilon_base).
+            epsilon_query = epsilon if epsilon is not None else self._config.epsilon_base
+            weighted_epsilon = self.budget_service.calculate_adjusted_epsilon(
+                len(aggregate_info),
+                epsilon_query,
             )
 
-        # ── 6. Deduct budget BEFORE executing ───
-        self.budget_service.deduct_budget(epsilon_query)
-        self.session_service.add_epsilon_spent(sid, epsilon_query)
-        logger.info("Privacy budget check passed. Deducted %s.", epsilon_query)
+            if not self.budget_service.check_budget(epsilon_query):
+                return self._error_response(
+                    "BUDGET_EXHAUSTED", sid, session.conversation_history,
+                    privacy_mode=privacy_mode,
+                )
+
+            # ── 6. Deduct budget BEFORE executing ───
+            self.budget_service.deduct_budget(epsilon_query)
+            self.session_service.add_epsilon_spent(sid, epsilon_query)
+            logger.info("Privacy budget check passed. Deducted %s.", epsilon_query)
 
         # ── 7. Execute query ───────────────────────────────────────────
         try:
@@ -195,24 +219,29 @@ class OrchestratorService:
         except Exception as e:
             logger.error("Query execution failed: %s", e)
             return self._error_response(
-                "QUERY_EXECUTION_FAILED", sid, session.conversation_history
+                "QUERY_EXECUTION_FAILED", sid, session.conversation_history,
+                privacy_mode=privacy_mode,
             )
 
-        # ── 8. Add Laplace noise ───────────────────────────────────────
-        noisy_result = self.noise_service.add_noise(
-            query_results,
-            aggregate_info,
-            attribute_configs,
-            weighted_epsilon,
-        )
+        # ── 8. Add Laplace noise — privacy mode only ──────────────────
+        if privacy_mode:
+            noisy_result = self.noise_service.add_noise(
+                query_results,
+                aggregate_info,
+                attribute_configs,
+                weighted_epsilon,
+            )
 
-        # ── 9. Suppress small groups (uses noisy counts) ──────────────
-        noisy_result = self.noise_service.suppress_small_groups(
-            noisy_result, self._config.min_group_size
-        )
-        logger.info("Applied Laplace noise and suppressed small groups.")
+            # ── 9. Suppress small groups (uses noisy counts) ──────────
+            noisy_result = self.noise_service.suppress_small_groups(
+                noisy_result, self._config.min_group_size
+            )
+            logger.info("Applied Laplace noise and suppressed small groups.")
+        else:
+            # General mode: wrap raw results for type compatibility
+            noisy_result = NoisyResult(rows=query_results, aggregate_info=[])
 
-        # ── 9.5. Humanize bucket labels ────────────────────────────────
+        # ── 9.5. Humanize bucket labels (shared result transformation) ─
         noisy_result = self._humanize_bucket_labels(
             noisy_result, attribute_configs
         )
@@ -227,13 +256,11 @@ class OrchestratorService:
         # Append assistant response to conversation history
         self.session_service.add_to_history(sid, "assistant", response_text)
 
-        # Return response
-        return {
+        # Build response — privacy fields only included in privacy mode
+        response = {
             "response": response_text,
             "sessionId": sid,
-            "remainingPrivacyBudget": self.budget_service.get_remaining(),
-            "sessionEpsilonSpent": session.epsilon_spent,
-            "epsilonUsed": weighted_epsilon,
+            "privacy_mode": privacy_mode,
             "status": "success",
             "data": {
                 "query_results": noisy_result.rows,
@@ -241,6 +268,13 @@ class OrchestratorService:
             },
             "conversationHistory": list(session.conversation_history),
         }
+
+        if privacy_mode:
+            response["remainingPrivacyBudget"] = self.budget_service.get_remaining()
+            response["sessionEpsilonSpent"] = session.epsilon_spent
+            response["epsilonUsed"] = weighted_epsilon
+
+        return response
 
     # ── bucket label humanization ────────────────────────────────────────
 
